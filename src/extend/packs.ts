@@ -12,6 +12,27 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, normalize, sep } from 'node:path';
 
+export interface PackAgent {
+  readonly name: string;
+  /** Tier indirection (e.g. "tier:smart"); the runtime maps tiers to the user's chain. */
+  readonly model: string;
+  readonly tools: readonly string[];
+  readonly prompt: string;
+}
+
+export interface PackRubric {
+  readonly name: string;
+  /** Soft check: a prompt the model grades against (§5.2). */
+  readonly prompt: string;
+  /** Hard check: an executable that pairs with the prompt. */
+  readonly validator: string;
+}
+
+export interface PackMemory {
+  readonly seeds?: string;
+  readonly promotion?: string;
+}
+
 export interface PackManifest {
   readonly schema: 1;
   readonly name: string;
@@ -22,10 +43,16 @@ export interface PackManifest {
   readonly commands?: string;
   readonly hooks?: string;
   readonly grants: readonly string[];
+  readonly agents: readonly PackAgent[];
+  readonly rubrics: readonly PackRubric[];
+  readonly memory?: PackMemory;
+  readonly onboarding?: string;
+  /** Tier name → resolution hint ("best-available" etc.). No vendor names (A6). */
+  readonly modelTiers: Readonly<Record<string, string>>;
 }
 
-// Paths that must be validated when present.
-const PATH_KEYS = ['persona', 'skills', 'commands', 'hooks'] as const;
+// Single-string path keys validated when present.
+const PATH_KEYS = ['persona', 'skills', 'commands', 'hooks', 'onboarding'] as const;
 
 export function validatePackPath(_root: string, p: string): boolean {
   if (typeof p !== 'string' || p === '') return false;
@@ -41,6 +68,60 @@ export function validatePackPath(_root: string, p: string): boolean {
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
+}
+
+function asStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+}
+
+function parseAgents(v: unknown): PackAgent[] {
+  if (!Array.isArray(v)) return [];
+  const out: PackAgent[] = [];
+  for (const raw of v) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const o = raw as Record<string, unknown>;
+    const name = asString(o['name']);
+    const model = asString(o['model']);
+    const prompt = asString(o['prompt']);
+    if (name === undefined || model === undefined || prompt === undefined) continue;
+    out.push({ name, model, prompt, tools: asStringArray(o['tools']) });
+  }
+  return out;
+}
+
+function parseRubrics(v: unknown): PackRubric[] {
+  if (!Array.isArray(v)) return [];
+  const out: PackRubric[] = [];
+  for (const raw of v) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const o = raw as Record<string, unknown>;
+    const name = asString(o['name']);
+    if (name === undefined) continue;
+    // prompt/validator may be missing — that is a semantic problem the validator
+    // reports, not a parse failure (we keep the entry so the gap is visible).
+    out.push({ name, prompt: asString(o['prompt']) ?? '', validator: asString(o['validator']) ?? '' });
+  }
+  return out;
+}
+
+function parseMemory(v: unknown): PackMemory | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  const o = v as Record<string, unknown>;
+  const mem: Record<string, string> = {};
+  const seeds = asString(o['seeds']);
+  if (seeds !== undefined) mem['seeds'] = seeds;
+  const promotion = asString(o['promotion']);
+  if (promotion !== undefined) mem['promotion'] = promotion;
+  return Object.keys(mem).length > 0 ? (mem as PackMemory) : undefined;
+}
+
+function parseTiers(v: unknown): Record<string, string> {
+  if (typeof v !== 'object' || v === null) return {};
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === 'string') out[k] = val;
+  }
+  return out;
 }
 
 export function parseManifest(text: string): PackManifest {
@@ -60,14 +141,24 @@ export function parseManifest(text: string): PackManifest {
   if (version === undefined || version === '') throw new Error('pack.json is missing version');
   const description = asString(obj['description']) ?? '';
 
-  const grantsRaw = obj['grants'];
-  const grants: string[] = Array.isArray(grantsRaw) ? grantsRaw.filter((g): g is string => typeof g === 'string') : [];
+  const grants = asStringArray(obj['grants']);
 
-  const manifest: Record<string, unknown> = { schema: 1, name, version, description, grants };
+  const manifest: Record<string, unknown> = {
+    schema: 1,
+    name,
+    version,
+    description,
+    grants,
+    agents: parseAgents(obj['agents']),
+    rubrics: parseRubrics(obj['rubrics']),
+    modelTiers: parseTiers(obj['modelTiers']),
+  };
   for (const key of PATH_KEYS) {
     const val = asString(obj[key]);
     if (val !== undefined) manifest[key] = val;
   }
+  const memory = parseMemory(obj['memory']);
+  if (memory !== undefined) manifest['memory'] = memory;
   return manifest as unknown as PackManifest;
 }
 
@@ -78,6 +169,23 @@ export interface LoadedPack {
   readonly skillsDir?: string;
   readonly commandsDir?: string;
   readonly hooksDir?: string;
+}
+
+// Every pack-relative path the manifest declares, across all sections. Used by
+// loadPack (path-safety) and by pack-validate (existence + content checks).
+export function declaredPaths(manifest: PackManifest): readonly string[] {
+  const paths: string[] = [];
+  for (const key of PATH_KEYS) {
+    const val = (manifest as unknown as Record<string, string | undefined>)[key];
+    if (val !== undefined) paths.push(val);
+  }
+  for (const a of manifest.agents) paths.push(a.prompt);
+  for (const r of manifest.rubrics) {
+    if (r.prompt !== '') paths.push(r.prompt);
+    if (r.validator !== '') paths.push(r.validator);
+  }
+  if (manifest.memory?.seeds !== undefined) paths.push(manifest.memory.seeds);
+  return paths;
 }
 
 export async function loadPack(root: string): Promise<LoadedPack> {
@@ -91,10 +199,9 @@ export async function loadPack(root: string): Promise<LoadedPack> {
   const manifest = parseManifest(text);
 
   // Validate every declared path before resolving any of them.
-  for (const key of PATH_KEYS) {
-    const val = (manifest as unknown as Record<string, string | undefined>)[key];
-    if (val !== undefined && !validatePackPath(root, val)) {
-      throw new Error(`pack "${manifest.name}" declares an unsafe ${key} path: ${val} (must be ./-relative, no "..", inside the pack)`);
+  for (const p of declaredPaths(manifest)) {
+    if (!validatePackPath(root, p)) {
+      throw new Error(`pack "${manifest.name}" declares an unsafe path: ${p} (must be ./-relative, no "..", inside the pack)`);
     }
   }
 

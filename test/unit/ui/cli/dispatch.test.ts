@@ -110,6 +110,34 @@ test('packs validate on a real pack reports its name and exits 0', async () => {
   assert.match(out.join(''), /mypack/);
 });
 
+test('packs validate on a semantically broken pack lists problems and exits 1', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vegito-pack-'));
+  const root = join(dir, 'broken');
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'a.md'), 'agent a prompt', 'utf8');
+  await writeFile(join(root, 'b.md'), 'agent b prompt', 'utf8');
+  await writeFile(
+    join(root, 'pack.json'),
+    JSON.stringify({
+      schema: 1,
+      name: 'broken',
+      version: '1.0.0',
+      description: 'duplicate agents trip the semantic validator',
+      agents: [
+        { name: 'dup', model: 'tier:smart', tools: [], prompt: './a.md' },
+        { name: 'dup', model: 'tier:smart', tools: [], prompt: './b.md' },
+      ],
+      modelTiers: { smart: 'a capable tier' },
+    }),
+    'utf8',
+  );
+  const { err, ports } = collector();
+  const code = await dispatch(['packs', 'validate', root], ports({}));
+  assert.equal(code, 1);
+  assert.match(err.join(''), /problem\(s\)/);
+  assert.match(err.join(''), /dup/);
+});
+
 test('run streams a tool call through the real registry to completion', async () => {
   // model asks to write a file, then (next call) ends the turn — exercises the
   // executor + permission engine + gate end-to-end via the scripted wire.

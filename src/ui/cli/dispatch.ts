@@ -31,6 +31,7 @@ import { makeBuiltinTools, type BuiltinSet } from '../../tools/index.ts';
 import type { SkillSource, SkillMeta } from '../../tools/builtin/skill.ts';
 import { createStore } from '../../sessions/store.ts';
 import { loadPack } from '../../extend/packs.ts';
+import { validatePack } from '../../extend/pack-validate.ts';
 import { BUILTIN_CATALOG } from '../../providers/catalog.ts';
 import { resolveProfile } from '../../providers/profile.ts';
 import { credentialFromEnv } from '../../providers/credentials.ts';
@@ -258,9 +259,15 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
     return 2;
   }
   try {
-    const pack = await loadPack(c.path);
-    ports.write(`pack "${pack.manifest.name}" v${pack.manifest.version} — valid\n`);
-    return 0;
+    const result = await validatePack(c.path);
+    if (result.ok) {
+      const pack = await loadPack(c.path);
+      ports.write(`pack "${pack.manifest.name}" v${pack.manifest.version} — valid\n`);
+      return 0;
+    }
+    ports.writeErr(`invalid pack — ${result.problems.length} problem(s):\n`);
+    for (const p of result.problems) ports.writeErr(`  - ${p}\n`);
+    return 1;
   } catch (err) {
     ports.writeErr(`invalid pack: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;

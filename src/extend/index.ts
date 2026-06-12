@@ -29,8 +29,16 @@ export type {
   DispatchResult,
 } from './hooks.ts';
 
-export { parseManifest, validatePackPath, loadPack } from './packs.ts';
-export type { PackManifest, LoadedPack } from './packs.ts';
+export { parseManifest, validatePackPath, loadPack, declaredPaths } from './packs.ts';
+export type { PackManifest, LoadedPack, PackAgent, PackRubric, PackMemory } from './packs.ts';
+
+export {
+  validatePack,
+  validateManifestSemantics,
+  countNegativeConstraints,
+  MAX_NEGATIVE_CONSTRAINTS,
+} from './pack-validate.ts';
+export type { ValidationResult } from './pack-validate.ts';
 
 export { McpClient, encodeFrame, decodeFrames, spawnStdioTransport } from './mcp/client.ts';
 export type { McpTransport } from './mcp/client.ts';
