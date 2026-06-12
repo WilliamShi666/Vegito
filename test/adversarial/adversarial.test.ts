@@ -247,6 +247,25 @@ describe('adversarial: permission escalation', () => {
     assert.equal(verdict, 'deny');
   });
 
+  test('the floor denies tee writing a credential file even in bypass (arg-write, not redirect)', async () => {
+    const ws = await realpath(await mkdtemp(join(tmpdir(), 'vegito-adv-tee-')));
+    const engine = createEngine({
+      workspace: ws,
+      mode: 'bypass',
+      rules: [{ tool: 'bash', verdict: 'allow' }],
+    });
+    // The target file is an argument to tee, not a shell redirect, so the
+    // redirect-write floor never sees it. The command floor must catch it.
+    for (const cmd of [
+      'tee /etc/sudoers.d/evil',
+      'echo ssh-rsa AAAA... | tee ~/.ssh/authorized_keys',
+      'tee -a /etc/passwd',
+    ]) {
+      const verdict = await engine.check({ tool: 'bash', action: 'execute', target: cmd });
+      assert.equal(verdict, 'deny', `expected deny for: ${cmd}`);
+    }
+  });
+
   test('acceptEdits does not auto-allow a write that resolves outside the workspace', async () => {
     const ws = await realpath(await mkdtemp(join(tmpdir(), 'vegito-adv-ae-')));
     const engine = createEngine({ workspace: ws, mode: 'acceptEdits', rules: [] });

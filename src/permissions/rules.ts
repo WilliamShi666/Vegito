@@ -118,6 +118,11 @@ const COMMAND_FLOOR: readonly CommandFloor[] = [
     reason: 'a network tool and a credential file in the same command — likely exfiltration',
     hit: (cmd) => NET_TOOL.test(cmd) && CRED_PATH.test(cmd),
   },
+  {
+    name: 'tee-credential-file',
+    reason: 'tee writing a system credential file changes who can log in (the path is an argument, not a redirect, so the redirect-write floor never sees it)',
+    hit: (cmd) => /\btee\b/.test(cmd) && (CRED_PATH.test(cmd) || /\/etc\/passwd\b/.test(cmd)),
+  },
 ];
 
 // Files that define system identity/privilege: writes are floor for EVERY
