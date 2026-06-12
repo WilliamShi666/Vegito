@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, chmod, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dispatch, type DispatchPorts } from '../../../../src/ui/cli/dispatch.ts';
+import { dispatch, buildCallModel, type DispatchPorts } from '../../../../src/ui/cli/dispatch.ts';
 import { scriptedText } from '../../../../src/providers/wire/scripted.ts';
 
 function collector(): { out: string[]; err: string[]; ports: (extra: Partial<DispatchPorts>) => DispatchPorts } {
@@ -272,3 +272,25 @@ test('forge interactive uses the nextLine port to interview', async () => {
   assert.match(stdout.join(''), /content-studio/);
 });
 
+
+test('buildCallModel resolves a catalog alias to the canonical id for the wire', async () => {
+  // 'haiku' is an alias; the request body must carry the catalog id, or
+  // gateways reject the model (observed live: a proxy 400ing on "haiku").
+  const saved = process.env['ANTHROPIC_API_KEY'];
+  process.env['ANTHROPIC_API_KEY'] = 'sk-test-dummy';
+  try {
+    const seam = await buildCallModel('haiku', undefined);
+    assert.equal(seam.modelId, 'claude-haiku-4-5-20251001');
+    const full = await buildCallModel('claude-fable-5', undefined);
+    assert.equal(full.modelId, 'claude-fable-5');
+  } finally {
+    if (saved === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = saved;
+  }
+});
+
+test('buildCallModel passes a scripted model id through unchanged', async () => {
+  const script = await scriptFile([{ kind: 'events', events: scriptedText('ok') }]);
+  const seam = await buildCallModel('haiku', script);
+  assert.equal(seam.modelId, 'haiku'); // offline: no catalog, no resolution
+});

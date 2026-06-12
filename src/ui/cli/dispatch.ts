@@ -88,16 +88,17 @@ function effectiveConfig(base: VegitoConfig, c: ParsedCommand): VegitoConfig {
 
 // Build the model-call seam. `--script` reads a fixture and plays it through
 // ScriptedWire (offline); otherwise resolve a catalog profile + env credential
-// and build the live wire. Returns the provider display name alongside.
-async function buildCallModel(
+// and build the live wire. modelId is the canonical id the request body must
+// carry — aliases like 'haiku' are resolved here, or gateways reject them.
+export async function buildCallModel(
   model: string,
   scriptPath: string | undefined,
-): Promise<{ callModel: CallModel; providerName: string }> {
+): Promise<{ callModel: CallModel; providerName: string; modelId: string }> {
   if (scriptPath !== undefined) {
     const text = await readFile(scriptPath, 'utf8');
     const steps = JSON.parse(text) as readonly ScriptedStep[];
     const wire = new ScriptedWire(steps);
-    return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name };
+    return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name, modelId: model };
   }
   const profile = resolveProfile(BUILTIN_CATALOG, model);
   if (profile === undefined) throw new Error(`unknown model: ${model} (not in catalog)`);
@@ -106,7 +107,7 @@ async function buildCallModel(
   if (credential === null) throw new Error(`missing credential: set ${envVar} to use ${profile.id}`);
   const baseUrl = baseUrlFromEnv(profile.wire);
   const wire = buildWire(profile, credential, baseUrl === undefined ? {} : { baseUrl });
-  return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name };
+  return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name, modelId: profile.id };
 }
 
 async function buildSystemTiers(cwd: string, homeDir: string): Promise<readonly string[]> {
@@ -148,7 +149,7 @@ async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: Dispatch
   for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const config = effectiveConfig(loaded.config, c);
 
-  let seam: { callModel: CallModel; providerName: string };
+  let seam: { callModel: CallModel; providerName: string; modelId: string };
   try {
     seam = await buildCallModel(config.model, c.script);
   } catch (err) {
@@ -182,7 +183,7 @@ async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: Dispatch
   });
 
   const sid = `run-${APP_VERSION}`;
-  const start = reduce(initialState({ sid, model: config.model, maxIterations: config.maxIterations }), {
+  const start = reduce(initialState({ sid, model: seam.modelId, maxIterations: config.maxIterations }), {
     t: 'user_msg',
     blocks: [{ kind: 'text', text: c.prompt }],
   });
@@ -206,7 +207,7 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
   for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const config = effectiveConfig(loaded.config, c);
 
-  let seam: { callModel: CallModel; providerName: string };
+  let seam: { callModel: CallModel; providerName: string; modelId: string };
   try {
     seam = await buildCallModel(config.model, c.script);
   } catch (err) {
@@ -241,7 +242,7 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
 
   // The REPL keeps one evolving session: each line reduces into history, then
   // a turn runs. settleAsk bridges permission asks to the next input line.
-  let state: SessionState = initialState({ sid: `repl-${APP_VERSION}`, model: config.model, maxIterations: config.maxIterations });
+  let state: SessionState = initialState({ sid: `repl-${APP_VERSION}`, model: seam.modelId, maxIterations: config.maxIterations });
 
   const replPorts: ReplPorts = {
     nextLine: ports.nextLine,
@@ -333,8 +334,8 @@ async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: Disp
     try {
       const loaded = await loadConfig({ homeDir: ports.homeDir, cwd: ports.cwd });
       const cfg = loaded.config;
-      const { callModel } = await buildCallModel(cfg.model, c.script);
-      spec = await enrichSpec(spec, callModel, ports.signal ?? new AbortController().signal, cfg.model);
+      const { callModel, modelId } = await buildCallModel(cfg.model, c.script);
+      spec = await enrichSpec(spec, callModel, ports.signal ?? new AbortController().signal, modelId);
     } catch (err) {
       ports.writeErr(`note: persona enrichment skipped (${err instanceof Error ? err.message : String(err)})\n`);
     }
@@ -452,14 +453,15 @@ async function cmdEvolve(c: Extract<ParsedCommand, { cmd: 'evolve' }>, ports: Di
   const cfg = loaded.config;
   const signal = ports.signal ?? new AbortController().signal;
   let callModel: CallModel;
+  let modelId: string;
   try {
-    ({ callModel } = await buildCallModel(cfg.model, c.script));
+    ({ callModel, modelId } = await buildCallModel(cfg.model, c.script));
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 
-  const reviewer = buildReviewer(callModel, signal, cfg.model);
+  const reviewer = buildReviewer(callModel, signal, modelId);
   const observations = await observe(c.session, messages, reviewer);
   if (observations.length === 0) {
     ports.write('no observations — pack unchanged\n');
