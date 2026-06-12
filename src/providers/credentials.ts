@@ -79,3 +79,18 @@ export function credentialFromEnv(id: string, envVar: string, kind: AuthKind): C
   const headers = kind === 'anthropic' ? { 'x-api-key': value } : { authorization: `Bearer ${value}` };
   return { id, headers };
 }
+
+const BASE_URL_VARS: Record<AuthKind, string> = {
+  anthropic: 'ANTHROPIC_BASE_URL',
+  openai: 'OPENAI_BASE_URL',
+};
+
+// Endpoint override per wire kind — the convention every gateway, proxy, and
+// sandbox expects (and what Claude Code/opencode honor). Unset or empty means
+// the wire's own default host; trailing slashes are trimmed so wires can
+// append their fixed paths.
+export function baseUrlFromEnv(kind: AuthKind): string | undefined {
+  const value = process.env[BASE_URL_VARS[kind]];
+  if (value === undefined || value === '') return undefined;
+  return value.replace(/\/+$/, '');
+}

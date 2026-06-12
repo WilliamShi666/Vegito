@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert';
 import {
   CredentialPool,
   credentialFromEnv,
+  baseUrlFromEnv,
   DEFAULT_COOL_MS,
   type Credential,
 } from '../../../src/providers/credentials.ts';
@@ -96,6 +97,41 @@ describe('credentialFromEnv', () => {
       assert.equal(credentialFromEnv('x', 'VEGITO_TEST_MISSING', 'anthropic'), null);
     } finally {
       delete process.env['VEGITO_TEST_MISSING'];
+    }
+  });
+});
+
+describe('baseUrlFromEnv', () => {
+  const KINDS = [
+    { kind: 'anthropic', envVar: 'ANTHROPIC_BASE_URL' },
+    { kind: 'openai', envVar: 'OPENAI_BASE_URL' },
+  ] as const;
+
+  test('reads the conventional override per kind and trims a trailing slash', () => {
+    for (const { kind, envVar } of KINDS) {
+      const saved = process.env[envVar];
+      process.env[envVar] = 'https://gw.example.com/api/';
+      try {
+        assert.equal(baseUrlFromEnv(kind), 'https://gw.example.com/api');
+      } finally {
+        if (saved === undefined) delete process.env[envVar];
+        else process.env[envVar] = saved;
+      }
+    }
+  });
+
+  test('unset or empty means no override', () => {
+    for (const { kind, envVar } of KINDS) {
+      const saved = process.env[envVar];
+      delete process.env[envVar];
+      try {
+        assert.equal(baseUrlFromEnv(kind), undefined);
+        process.env[envVar] = '';
+        assert.equal(baseUrlFromEnv(kind), undefined);
+      } finally {
+        if (saved === undefined) delete process.env[envVar];
+        else process.env[envVar] = saved;
+      }
     }
   });
 });

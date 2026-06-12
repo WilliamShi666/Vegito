@@ -39,4 +39,24 @@ describe('buildWire', () => {
     const wire = buildWire(anthropic, cred);
     assert.equal(typeof wire.send, 'function');
   });
+
+  test('a baseUrl override redirects the wire (gateways, proxies, local endpoints)', async () => {
+    const urls: string[] = [];
+    const fetchFn: typeof fetch = async (url) => {
+      urls.push(String(url));
+      return new Response('', { status: 500 });
+    };
+    const a = buildWire(anthropic, cred, { baseUrl: 'https://gw.example.com/anthropic', fetchFn });
+    await assert.rejects(async () => {
+      for await (const _ of a.send({ model: 'claude-x', system: [], messages: [], tools: [], maxTokens: 16 }, new AbortController().signal)) void _;
+    });
+    const o = buildWire(openai, cred, { baseUrl: 'https://gw.example.com/v1', fetchFn });
+    await assert.rejects(async () => {
+      for await (const _ of o.send({ model: 'gpt-x', system: [], messages: [], tools: [], maxTokens: 16 }, new AbortController().signal)) void _;
+    });
+    assert.deepEqual(urls, [
+      'https://gw.example.com/anthropic/v1/messages',
+      'https://gw.example.com/v1/chat/completions',
+    ]);
+  });
 });

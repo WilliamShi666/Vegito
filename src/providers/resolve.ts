@@ -19,7 +19,18 @@ export function envVarForWire(kind: WireKind): string {
   return ENV_VARS[kind];
 }
 
-export function buildWire(profile: ModelProfile, credential: Credential): WireProtocol {
-  const auth = (): Record<string, string> => credential.headers;
-  return profile.wire === 'anthropic' ? new AnthropicWire({ auth }) : new OpenAiWire({ auth });
+export interface BuildWireOpts {
+  /** Endpoint override (gateways, proxies, local endpoints); default = the wire's own host. */
+  readonly baseUrl?: string;
+  /** Injected fetch for tests; default globalThis.fetch. */
+  readonly fetchFn?: typeof fetch;
+}
+
+export function buildWire(profile: ModelProfile, credential: Credential, opts: BuildWireOpts = {}): WireProtocol {
+  const wireOpts = {
+    auth: (): Record<string, string> => credential.headers,
+    ...(opts.baseUrl === undefined ? {} : { baseUrl: opts.baseUrl }),
+    ...(opts.fetchFn === undefined ? {} : { fetchFn: opts.fetchFn }),
+  };
+  return profile.wire === 'anthropic' ? new AnthropicWire(wireOpts) : new OpenAiWire(wireOpts);
 }

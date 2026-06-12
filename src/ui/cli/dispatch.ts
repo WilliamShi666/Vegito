@@ -42,7 +42,7 @@ import { createEngine } from '../../permissions/engine.ts';
 import type { PermKey } from '../../tools/spec.ts';
 import { BUILTIN_CATALOG } from '../../providers/catalog.ts';
 import { resolveProfile } from '../../providers/profile.ts';
-import { credentialFromEnv } from '../../providers/credentials.ts';
+import { credentialFromEnv, baseUrlFromEnv } from '../../providers/credentials.ts';
 import { buildWire, envVarForWire } from '../../providers/resolve.ts';
 import { ScriptedWire, type ScriptedStep } from '../../providers/wire/scripted.ts';
 import type { NeutralRequest, ProviderEvent } from '../../providers/types.ts';
@@ -104,7 +104,8 @@ async function buildCallModel(
   const envVar = envVarForWire(profile.wire);
   const credential = credentialFromEnv(profile.wire, envVar, profile.wire);
   if (credential === null) throw new Error(`missing credential: set ${envVar} to use ${profile.id}`);
-  const wire = buildWire(profile, credential);
+  const baseUrl = baseUrlFromEnv(profile.wire);
+  const wire = buildWire(profile, credential, baseUrl === undefined ? {} : { baseUrl });
   return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name };
 }
 
