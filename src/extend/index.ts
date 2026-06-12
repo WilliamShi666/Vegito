@@ -1,2 +1,36 @@
-// Filled in P8 — one registry: skills, hooks, packs. Placeholder barrel so the module graph typechecks from day one (P0).
-export {};
+// Extend layer barrel (DESIGN §8): the one registry plus its constituent
+// discovery and loading modules — skills, commands, hooks, packs, MCP.
+
+export { createExtensionRegistry } from './registry.ts';
+export type { ExtensionRegistry } from './registry.ts';
+
+export { discoverSkills, discoverSkillBodies, parseSkillFrontmatter } from './skills.ts';
+export type { SkillFrontmatter } from './skills.ts';
+
+export {
+  discoverCommands,
+  parseCommand,
+  renderTemplate,
+  mergeCommandSources,
+  commandsFrom,
+  skillsAsCommands,
+} from './commands.ts';
+export type { Command, CommandSource } from './commands.ts';
+
+export { HOOK_EVENTS, classifyExit, createHookBus, spawnHookRunner } from './hooks.ts';
+export type {
+  HookEvent,
+  HookSpec,
+  HookRunner,
+  HookRunResult,
+  HookOutcome,
+  HookDecision,
+  HookBus,
+  DispatchResult,
+} from './hooks.ts';
+
+export { parseManifest, validatePackPath, loadPack } from './packs.ts';
+export type { PackManifest, LoadedPack } from './packs.ts';
+
+export { McpClient, encodeFrame, decodeFrames, spawnStdioTransport } from './mcp/client.ts';
+export type { McpTransport } from './mcp/client.ts';
