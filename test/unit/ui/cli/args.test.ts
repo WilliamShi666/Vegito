@@ -14,6 +14,16 @@ describe('parseArgs', () => {
     assert.equal(parseArgs([]).cmd, 'repl');
   });
 
+  test('repl carries --model, --mode, --cwd and the offline --script seam', () => {
+    const p = parseArgs(['repl', '--model', 'fable', '--mode', 'plan', '--cwd', '/w', '--script', 's.json']);
+    assert.equal(p.cmd, 'repl');
+    if (p.cmd !== 'repl') return;
+    assert.equal(p.model, 'fable');
+    assert.equal(p.mode, 'plan');
+    assert.equal(p.cwd, '/w');
+    assert.equal(p.script, 's.json');
+  });
+
   test('--version / -v / version select the version command', () => {
     for (const a of [['--version'], ['-v'], ['version']]) assert.equal(parseArgs(a).cmd, 'version');
   });

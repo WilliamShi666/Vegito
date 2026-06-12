@@ -10,7 +10,7 @@ import type { PermissionMode } from '../../config/schema.ts';
 const MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypass'];
 
 export type ParsedCommand =
-  | { readonly cmd: 'repl'; readonly model?: string; readonly mode?: PermissionMode; readonly cwd?: string }
+  | { readonly cmd: 'repl'; readonly model?: string; readonly mode?: PermissionMode; readonly cwd?: string; readonly script?: string }
   | {
       readonly cmd: 'run';
       readonly prompt: string;
@@ -79,7 +79,7 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
     if ('error' in f) return { cmd: 'error', message: f.error };
     const mode = asMode(f.values.mode);
     if (mode && typeof mode === 'object') return { cmd: 'error', message: mode.error };
-    return { cmd: 'repl', ...opt('model', f.values.model), ...(mode ? { mode } : {}), ...opt('cwd', f.values.cwd) };
+    return { cmd: 'repl', ...opt('model', f.values.model), ...(mode ? { mode } : {}), ...opt('cwd', f.values.cwd), ...opt('script', f.values.script) };
   }
   if (head === '--version' || head === '-v' || head === 'version') return { cmd: 'version' };
   if (head === '--help' || head === '-h' || head === 'help') return { cmd: 'help' };

@@ -178,7 +178,7 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
 
   let seam: { callModel: CallModel; providerName: string };
   try {
-    seam = await buildCallModel(config.model, undefined);
+    seam = await buildCallModel(config.model, c.script);
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
