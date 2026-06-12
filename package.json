@@ -1,0 +1,37 @@
+{
+  "name": "vegito",
+  "version": "0.1.0",
+  "description": "Vegito — the fusion agent harness: a general work + coding agent and a meta-harness that forges domain-specific small harnesses.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "vegito": "./bin/vegito.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "catalog",
+    "packs"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --disable-warning=ExperimentalWarning --test 'test/**/*.test.ts'",
+    "test:unit": "node --disable-warning=ExperimentalWarning --test 'test/unit/**/*.test.ts'",
+    "test:golden": "node --disable-warning=ExperimentalWarning --test 'test/golden/**/*.test.ts'",
+    "test:integration": "node --disable-warning=ExperimentalWarning --test 'test/integration/**/*.test.ts'",
+    "test:e2e": "node --disable-warning=ExperimentalWarning --test 'test/e2e/**/*.test.ts'",
+    "test:adversarial": "node --disable-warning=ExperimentalWarning --test 'test/adversarial/**/*.test.ts'",
+    "coverage": "node --disable-warning=ExperimentalWarning --test --experimental-test-coverage 'test/**/*.test.ts'",
+    "lint:constitution": "node scripts/constitution.mjs",
+    "check": "npm run typecheck && npm run lint:constitution && npm test"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.0"
+  }
+}
