@@ -1,2 +1,2 @@
-// Filled in P2 — WireProtocol adapters (anthropic/openai/scripted), profiles, credentials, failover. Placeholder barrel so the module graph typechecks from day one (P0).
-export {};
+// WireProtocol adapters, profiles, credentials, and failover land in P2.
+export * from './types.ts';

@@ -1,2 +1,3 @@
-// Filled in P2 — settings resolution, catalog loading, user/project space. Placeholder barrel so the module graph typechecks from day one (P0).
-export {};
+// Catalog loading joins in P2 alongside the provider registry.
+export * from './schema.ts';
+export * from './load.ts';
