@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "name": "ielts",
+  "version": "1.0.0",
+  "description": "A tutoring team for IELTS writing and speaking: assess, coach, and drill.",
+  "persona": "./persona.md",
+  "grants": [],
+  "agents": [
+    {
+      "name": "examiner",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/examiner.md"
+    },
+    {
+      "name": "coach",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/coach.md"
+    },
+    {
+      "name": "drill-master",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/drill-master.md"
+    }
+  ],
+  "rubrics": [
+    {
+      "name": "band-score",
+      "prompt": "./rubrics/band-score.prompt.md",
+      "validator": "./rubrics/band-score.validator.mjs"
+    }
+  ],
+  "modelTiers": {
+    "smart": "the strongest available reasoning tier, for assessment and feedback",
+    "fast": "a quick, cheap tier for drills and bookkeeping"
+  },
+  "onboarding": "./onboarding.md",
+  "memory": {
+    "seeds": "./memory/seeds.md",
+    "promotion": "L1 episodic: per-session errors. L2 curated: an error type seen in 3+ sessions becomes a tracked weakness. L3 synthesis: a resolved weakness becomes a mastery note."
+  }
+}

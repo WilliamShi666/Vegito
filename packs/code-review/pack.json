@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "name": "code-review",
+  "version": "1.0.0",
+  "description": "A review team for code review for TypeScript services: critique, audit, and synthesize findings.",
+  "persona": "./persona.md",
+  "grants": [],
+  "agents": [
+    {
+      "name": "reviewer",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/reviewer.md"
+    },
+    {
+      "name": "auditor",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/auditor.md"
+    },
+    {
+      "name": "synthesizer",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/synthesizer.md"
+    }
+  ],
+  "rubrics": [
+    {
+      "name": "severity-tagged",
+      "prompt": "./rubrics/severity-tagged.prompt.md",
+      "validator": "./rubrics/severity-tagged.validator.mjs"
+    }
+  ],
+  "modelTiers": {
+    "smart": "the strongest available reasoning tier, for judgement-heavy review",
+    "fast": "a quick tier for mechanical checks and formatting"
+  },
+  "onboarding": "./onboarding.md",
+  "memory": {
+    "seeds": "./memory/seeds.md",
+    "promotion": "L1 episodic: per-review findings. L2 curated: an issue class seen repeatedly becomes a standing checklist item. L3 synthesis: a checklist item the author has internalized is retired."
+  }
+}
