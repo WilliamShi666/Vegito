@@ -57,8 +57,26 @@ describe('tools barrel', () => {
       'todo',
       'write',
     ]);
-    // agent ships hidden until P9 — present, not advertised
-    assert.equal(registry.get('agent')?.exposure, 'hidden');
+    // No multi-agent deps supplied → no agent tool in the surface at all (P9).
+    assert.equal(registry.get('agent'), undefined);
+    assert.equal(registry.listAll().length, 12);
+    set.dispose();
+  });
+
+  test('agent tool appears — direct, execute-class — only when multi-agent deps are supplied', () => {
+    const set = makeBuiltinTools({
+      ...deps(),
+      agent: {
+        spawner: { spawn: async (s) => ({ name: s.name, status: 'ok', content: '' }) },
+        depth: 0,
+        grants: ['read'],
+      },
+    });
+    const registry = new ToolRegistry();
+    for (const tool of set.tools) registry.register(tool);
+    const agent = registry.get('agent');
+    assert.ok(agent, 'agent tool should be present when deps.agent is supplied');
+    assert.equal(agent!.exposure, 'direct');
     assert.equal(registry.listAll().length, 13);
     set.dispose();
   });

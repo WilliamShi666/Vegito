@@ -4,7 +4,8 @@
 // state leaks across sessions.
 
 import type { ToolSpec } from './spec.ts';
-import { agentTool } from './builtin/agent.ts';
+import { makeAgentTool } from './builtin/agent.ts';
+import type { AgentToolDeps } from './builtin/agent.ts';
 import { makeBashTools } from './builtin/bash.ts';
 import { editTool } from './builtin/edit.ts';
 import { makeFetchTool } from './builtin/fetch.ts';
@@ -42,7 +43,8 @@ export type { FetchOpts } from './builtin/fetch.ts';
 export { makeMemoryTool } from './builtin/memory.ts';
 export { makeSkillTool } from './builtin/skill.ts';
 export type { SkillMeta, SkillSource } from './builtin/skill.ts';
-export { agentTool } from './builtin/agent.ts';
+export { makeAgentTool } from './builtin/agent.ts';
+export type { AgentIn, AgentToolDeps } from './builtin/agent.ts';
 
 export interface BuiltinDeps {
   /** Directory for the persistent memory store. */
@@ -50,6 +52,12 @@ export interface BuiltinDeps {
   /** Skill catalog (P8's registry implements this from disk). */
   readonly skills: SkillSource;
   readonly fetchOpts?: FetchOpts;
+  /**
+   * Multi-agent wiring (P9). When present, the `agent` tool is constructed and
+   * exposed; the session layer supplies a Spawner whose runChild re-enters the
+   * loop. Absent ⇒ no spawning surface in this session.
+   */
+  readonly agent?: AgentToolDeps;
 }
 
 export interface BuiltinSet {
@@ -73,7 +81,7 @@ export function makeBuiltinTools(deps: BuiltinDeps): BuiltinSet {
     makeFetchTool(deps.fetchOpts),
     makeMemoryTool(deps.memoryDir),
     makeSkillTool(deps.skills),
-    agentTool,
   ];
+  if (deps.agent) tools.push(makeAgentTool(deps.agent));
   return { tools, dispose: () => bash.dispose() };
 }
