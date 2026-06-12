@@ -1,15 +1,45 @@
-import { pathToFileURL } from 'node:url';
-import { VERSION } from './version.ts';
+// CLI entry (DESIGN §11): main() is the thinnest possible shell over dispatch.
+// It binds the real effects — stdout/stderr, home/cwd, a SIGINT-driven abort
+// signal, and line-buffered stdin for the REPL — and hands the rest to the
+// pure-ish dispatch router. All routing, parsing, and exit-code logic lives in
+// ui/cli/dispatch.ts so it can be tested offline; this file only touches the
+// process and the terminal.
 
-// Subcommand surface lands at P10 (DESIGN §11); until then the CLI reports identity.
+import { pathToFileURL } from 'node:url';
+import { homedir } from 'node:os';
+import { createInterface } from 'node:readline';
+import { dispatch, type DispatchPorts } from './ui/cli/dispatch.ts';
+
+function makeLineReader(): () => Promise<string | null> {
+  const rl = createInterface({ input: process.stdin });
+  const iter = rl[Symbol.asyncIterator]();
+  return async () => {
+    const { value, done } = await iter.next();
+    return done ? null : (value as string);
+  };
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
-  const cmd = argv[0] ?? 'repl';
-  if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
-    console.log(`vegito ${VERSION}`);
-    return 0;
+  const controller = new AbortController();
+  const onSigint = (): void => controller.abort(new Error('interrupted'));
+  process.once('SIGINT', onSigint);
+
+  const wantsRepl = argv[0] === undefined || argv[0] === 'repl';
+
+  const ports: DispatchPorts = {
+    write: (s) => process.stdout.write(s),
+    writeErr: (s) => process.stderr.write(s),
+    homeDir: homedir(),
+    cwd: process.cwd(),
+    signal: controller.signal,
+    ...(wantsRepl ? { nextLine: makeLineReader() } : {}),
+  };
+
+  try {
+    return await dispatch(argv, ports);
+  } finally {
+    process.removeListener('SIGINT', onSigint);
   }
-  console.log(`vegito ${VERSION} — scaffold build; subcommands arrive with phase P10`);
-  return 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

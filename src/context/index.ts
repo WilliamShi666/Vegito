@@ -6,6 +6,8 @@
 export * from './tokens.ts';
 export * from './filestate.ts';
 
+export { IDENTITY, CONSTITUTION } from './identity.ts';
+
 export { createSystemPrompt } from './prompt.ts';
 export type { SystemPrompt, PromptParts, PromptEnvironment, MemoryFile } from './prompt.ts';
 
