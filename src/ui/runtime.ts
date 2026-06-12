@@ -15,6 +15,7 @@ import { MessageBudget, DEFAULT_BUDGET } from '../tools/budget.ts';
 import { FileState } from '../context/filestate.ts';
 import { createEngine } from '../permissions/engine.ts';
 import type { Rule } from '../permissions/rules.ts';
+import type { HookBus } from '../extend/hooks.ts';
 import type { PermissionMode, VegitoConfig } from '../config/schema.ts';
 import type { NeutralRequest, ProviderEvent, ToolDef } from '../providers/types.ts';
 
@@ -39,6 +40,8 @@ export interface RuntimeOptions {
   readonly signal: AbortSignal;
   /** Permission rules; default none (mode alone governs). */
   readonly rules?: readonly Rule[];
+  /** Lifecycle hook bus (PreToolUse/PostToolUse fire in the executor); default none. */
+  readonly hooks?: HookBus;
   /** Per-request output token ceiling; default 4096. */
   readonly maxTokens?: number;
   /** Recovery attempts per model call; default 4. */
@@ -78,6 +81,7 @@ export function assembleLoopDeps(opts: RuntimeOptions): LoopDeps {
       gate: new RwGate(),
       budget: new MessageBudget(DEFAULT_BUDGET),
       ctx: { cwd: opts.workspace, signal: opts.signal, files: new FileState() },
+      ...(opts.hooks === undefined ? {} : { hooks: opts.hooks }),
     },
     recoverer,
     signal: opts.signal,

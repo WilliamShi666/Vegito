@@ -203,3 +203,110 @@ test('oversized output is budget-fitted in the result content', async () => {
   assert.ok(r.content.length <= 1000);
   assert.match(r.content, /omitted/);
 });
+
+// --- hook integration (PreToolUse / PostToolUse) ----------------------------
+// A stub HookBus: scripted per-event outcomes, recording every dispatch so the
+// payload contract (tool name, ok, output) can be asserted.
+function stubBus(
+  script: Partial<Record<'PreToolUse' | 'PostToolUse', import('../../../src/extend/hooks.ts').DispatchResult>>,
+): {
+  bus: import('../../../src/extend/hooks.ts').HookBus;
+  calls: { event: string; payload: Record<string, unknown> }[];
+} {
+  const calls: { event: string; payload: Record<string, unknown> }[] = [];
+  const bus = {
+    dispatch: async (event: string, payload: Record<string, unknown>) => {
+      calls.push({ event, payload });
+      return (
+        (script as Record<string, import('../../../src/extend/hooks.ts').DispatchResult>)[event] ?? {
+          decision: 'allow' as const,
+          contexts: [],
+          messages: [],
+        }
+      );
+    },
+  } as import('../../../src/extend/hooks.ts').HookBus;
+  return { bus, calls };
+}
+
+test('a PreToolUse block prevents the tool from running and fails the call', async () => {
+  const reg = new ToolRegistry();
+  let ran = false;
+  reg.register(writeTool('mutate', () => {
+    ran = true;
+    return 'mutated';
+  }));
+  const deps = makeDeps(reg);
+  const { bus, calls } = stubBus({
+    PreToolUse: { decision: 'block', contexts: [], messages: ['policy: no mutate on fridays'] },
+  });
+  deps.hooks = bus;
+  const { result } = await drive(executeTools([call('c1', 'mutate')], deps));
+  const r = (result as { ok: boolean; content: string }[])[0]!;
+  assert.equal(ran, false, 'tool must not run when PreToolUse blocks');
+  assert.equal(r.ok, false);
+  assert.match(r.content, /policy: no mutate on fridays/);
+  // The PreToolUse payload names the tool; PostToolUse never fires on a block.
+  assert.equal(calls.filter((c) => c.event === 'PreToolUse').length, 1);
+  assert.equal(calls.filter((c) => c.event === 'PostToolUse').length, 0);
+  assert.equal(calls[0]!.payload['tool'], 'mutate');
+});
+
+test('a PreToolUse allow injects stdout context into the tool result', async () => {
+  const reg = new ToolRegistry();
+  reg.register(readTool('look', () => 'raw-output'));
+  const deps = makeDeps(reg);
+  deps.hooks = stubBus({
+    PreToolUse: { decision: 'allow', contexts: ['injected: cwd is clean'], messages: [] },
+  }).bus;
+  const { result } = await drive(executeTools([call('c1', 'look')], deps));
+  const r = (result as { ok: boolean; content: string }[])[0]!;
+  assert.equal(r.ok, true);
+  assert.match(r.content, /raw-output/);
+  assert.match(r.content, /injected: cwd is clean/);
+});
+
+test('a PostToolUse runs after the tool and appends its context; payload carries ok+output', async () => {
+  const reg = new ToolRegistry();
+  reg.register(readTool('look', () => 'the-output'));
+  const deps = makeDeps(reg);
+  const { bus, calls } = stubBus({
+    PostToolUse: { decision: 'allow', contexts: ['note: 1 file touched'], messages: [] },
+  });
+  deps.hooks = bus;
+  const { result } = await drive(executeTools([call('c1', 'look')], deps));
+  const r = (result as { ok: boolean; content: string }[])[0]!;
+  assert.equal(r.ok, true);
+  assert.match(r.content, /the-output/);
+  assert.match(r.content, /note: 1 file touched/);
+  const post = calls.find((c) => c.event === 'PostToolUse');
+  assert.ok(post, 'PostToolUse must fire');
+  assert.equal(post!.payload['tool'], 'look');
+  assert.equal(post!.payload['ok'], true);
+  assert.match(String(post!.payload['output']), /the-output/);
+});
+
+test('a PostToolUse block flips ok to false even though the tool ran', async () => {
+  const reg = new ToolRegistry();
+  let ran = false;
+  reg.register(readTool('look', () => {
+    ran = true;
+    return 'the-output';
+  }));
+  const deps = makeDeps(reg);
+  deps.hooks = stubBus({
+    PostToolUse: { decision: 'block', contexts: [], messages: ['blocked: output leaked a secret'] },
+  }).bus;
+  const { result } = await drive(executeTools([call('c1', 'look')], deps));
+  const r = (result as { ok: boolean; content: string }[])[0]!;
+  assert.equal(ran, true, 'tool ran before PostToolUse saw its output');
+  assert.equal(r.ok, false);
+  assert.match(r.content, /blocked: output leaked a secret/);
+});
+
+test('with no hooks bus, behavior is unchanged (no dispatch, plain result)', async () => {
+  const reg = new ToolRegistry();
+  reg.register(readTool('look', () => 'plain'));
+  const { result } = await drive(executeTools([call('c1', 'look')], makeDeps(reg)));
+  assert.deepEqual(result, [{ callId: 'c1', ok: true, content: 'plain' }]);
+});

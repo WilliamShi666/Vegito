@@ -32,6 +32,7 @@ import type { SkillSource, SkillMeta } from '../../tools/builtin/skill.ts';
 import { createStore } from '../../sessions/store.ts';
 import { loadPack } from '../../extend/packs.ts';
 import { validatePack } from '../../extend/pack-validate.ts';
+import { loadHooksFile, createHookBus, spawnHookRunner, type HookBus } from '../../extend/hooks.ts';
 import { planFromFlags, inferPlan, interview, planToSpec, type ForgePlan } from '../../forge/interview.ts';
 import { generatePack } from '../../forge/generate.ts';
 import { enrichSpec } from '../../forge/enrich.ts';
@@ -131,6 +132,15 @@ function buildRegistry(memoryDir: string): { registry: ToolRegistry; builtins: B
   return { registry, builtins };
 }
 
+// Project-level hooks: ./.vegito/hooks.json in the workspace, same layering
+// spirit as config. A malformed file throws (callers abort the run) — hooks
+// are the user's guardrails, so dropping them silently is the wrong failure.
+async function buildHooks(cwd: string): Promise<HookBus | undefined> {
+  const specs = await loadHooksFile(join(cwd, '.vegito', 'hooks.json'));
+  if (specs.length === 0) return undefined;
+  return createHookBus(specs, { runner: spawnHookRunner() });
+}
+
 async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: DispatchPorts): Promise<number> {
   const cwd = ports.cwd;
   const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
@@ -149,6 +159,15 @@ async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: Dispatch
   const systemTiers = await buildSystemTiers(cwd, ports.homeDir);
   const signal = ports.signal ?? new AbortController().signal;
 
+  let hooks: HookBus | undefined;
+  try {
+    hooks = await buildHooks(cwd);
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    builtins.dispose();
+    return 1;
+  }
+
   const deps = assembleLoopDeps({
     providerName: seam.providerName,
     callModel: seam.callModel,
@@ -158,6 +177,7 @@ async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: Dispatch
     systemTiers,
     config,
     signal,
+    ...(hooks === undefined ? {} : { hooks }),
   });
 
   const sid = `run-${APP_VERSION}`;
@@ -197,6 +217,15 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
   const systemTiers = await buildSystemTiers(cwd, ports.homeDir);
   const signal = ports.signal ?? new AbortController().signal;
 
+  let hooks: HookBus | undefined;
+  try {
+    hooks = await buildHooks(cwd);
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    builtins.dispose();
+    return 1;
+  }
+
   const deps = assembleLoopDeps({
     providerName: seam.providerName,
     callModel: seam.callModel,
@@ -206,6 +235,7 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
     systemTiers,
     config,
     signal,
+    ...(hooks === undefined ? {} : { hooks }),
   });
 
   // The REPL keeps one evolving session: each line reduces into history, then

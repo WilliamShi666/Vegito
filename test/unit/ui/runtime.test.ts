@@ -117,4 +117,60 @@ describe('assembleLoopDeps', () => {
     const verdict = await deps.exec.engine.check({ tool: 'write', action: 'write', target: '/work/a.ts' });
     assert.equal(verdict, 'deny');
   });
+
+  test('threads a hook bus into the executor: a PreToolUse block stops the tool mid-turn', async () => {
+    const wire = new ScriptedWire([
+      { kind: 'events', events: [
+        { t: 'msg_start', model: 'm' },
+        { t: 'tool_call', callId: 'c1', name: 'touchy', input: {} },
+        { t: 'msg_end', stop: 'tool_use', usage: U },
+      ] },
+      { kind: 'events', events: [
+        { t: 'msg_start', model: 'm' },
+        { t: 'text_delta', text: 'understood' },
+        { t: 'msg_end', stop: 'end_turn', usage: U },
+      ] },
+    ]);
+    let ran = false;
+    const reg = registryWith(
+      defineTool({
+        name: 'touchy',
+        description: 'a tool the hook forbids',
+        schema: { type: 'object', properties: {} },
+        concurrencySafe: () => true,
+        permissionKey: () => ({ tool: 'touchy', action: 'read' }),
+        run: async () => {
+          ran = true;
+          return { content: 'touched' };
+        },
+      }),
+    );
+    const bus: import('../../../src/extend/hooks.ts').HookBus = {
+      dispatch: async (event) =>
+        event === 'PreToolUse'
+          ? { decision: 'block', contexts: [], messages: ['frozen by policy hook'] }
+          : { decision: 'allow', contexts: [], messages: [] },
+    };
+    const deps = assembleLoopDeps({
+      providerName: 'scripted',
+      callModel: (req, sig) => wire.send(req, sig),
+      registry: reg,
+      workspace: '/work',
+      mode: 'bypass',
+      systemTiers: ['id'],
+      config: { model: 'm', maxIterations: 5, permissionMode: 'bypass', trace: false },
+      signal: new AbortController().signal,
+      hooks: bus,
+    });
+
+    let s = initialState({ sid: 's', model: 'm', maxIterations: 5 });
+    s = reduce(s, { t: 'user_msg', blocks: [{ kind: 'text', text: 'touch it' }] });
+    const { reason } = await drive(s, deps);
+
+    assert.equal(reason, 'end_turn');
+    assert.equal(ran, false, 'the tool must not run when the hook blocks');
+    // The block reason went back to the model as the tool result.
+    assert.equal(wire.calls.length, 2);
+    assert.ok(JSON.stringify(wire.calls[1]!.messages).includes('frozen by policy hook'));
+  });
 });

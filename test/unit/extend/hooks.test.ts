@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import {
   classifyExit,
   createHookBus,
+  loadHooksFile,
   HOOK_EVENTS,
   spawnHookRunner,
   type HookRunner,
@@ -132,6 +133,56 @@ test('spawnHookRunner enforces the timeout, surfaced as warn', async () => {
     const out = await bus.dispatch('Stop', {});
     assert.equal(out.decision, 'warn');
     assert.ok(out.messages.some((m) => /timed out/i.test(m)));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadHooksFile: missing file is no hooks, not an error', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vg-hookfile-'));
+  try {
+    assert.deepEqual(await loadHooksFile(join(dir, 'hooks.json')), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadHooksFile parses specs and resolves relative commands against the file dir', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vg-hookfile-'));
+  try {
+    const file = join(dir, 'hooks.json');
+    await writeFile(
+      file,
+      JSON.stringify([
+        { event: 'PreToolUse', command: './guard.sh', matcher: 'bash' },
+        { event: 'Stop', command: '/usr/local/bin/audit' },
+      ]),
+      'utf8',
+    );
+    const specs = await loadHooksFile(file);
+    assert.equal(specs.length, 2);
+    assert.deepEqual(specs[0], { event: 'PreToolUse', command: join(dir, 'guard.sh'), matcher: 'bash' });
+    assert.deepEqual(specs[1], { event: 'Stop', command: '/usr/local/bin/audit' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadHooksFile fails loud on malformed JSON and unknown events (hooks are guardrails)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vg-hookfile-'));
+  try {
+    const file = join(dir, 'hooks.json');
+    await writeFile(file, '{ not json', 'utf8');
+    await assert.rejects(() => loadHooksFile(file), (err: Error) => err.message.includes(file));
+
+    await writeFile(file, JSON.stringify([{ event: 'BeforeToolUse', command: './x.sh' }]), 'utf8');
+    await assert.rejects(() => loadHooksFile(file), /unknown event/);
+
+    await writeFile(file, JSON.stringify([{ event: 'Stop' }]), 'utf8');
+    await assert.rejects(() => loadHooksFile(file), /command/);
+
+    await writeFile(file, JSON.stringify({ event: 'Stop', command: './x.sh' }), 'utf8');
+    await assert.rejects(() => loadHooksFile(file), /array/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

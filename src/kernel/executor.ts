@@ -8,13 +8,22 @@ import { validateToolInput } from '../tools/validate.ts';
 import { RwGate, type GateMode } from '../tools/gate.ts';
 import { MessageBudget } from '../tools/budget.ts';
 import type { Engine } from '../permissions/engine.ts';
+import type { HookBus } from '../extend/hooks.ts';
 
 // The tool execution stage (DESIGN §3.2, §7.1, L4). Drives the model's
 // pending tool calls through the pipeline: validate → permission gate (which
-// may surface an `ask`) → partition (concurrency-safe reads parallelize, writes
-// run exclusively via the RwGate) → run → output budget. It is an async
-// generator: it *yields* LoopEvents (tool_start, ask, tool_end) for any UI and
-// *returns* the ToolResultInput[] the reducer folds back into history.
+// may surface an `ask`) → PreToolUse hooks → partition (concurrency-safe reads
+// parallelize, writes run exclusively via the RwGate) → run → PostToolUse hooks
+// → output budget. It is an async generator: it *yields* LoopEvents (tool_start,
+// ask, tool_end) for any UI and *returns* the ToolResultInput[] the reducer
+// folds back into history.
+//
+// Hooks are augmentation layered over the permission gate, never a replacement
+// for it (the gate has already spoken by the time PreToolUse fires). A
+// PreToolUse block fails the call before run(); a PostToolUse block flips an
+// already-run result to failed so the model self-repairs. allow-hook stdout is
+// injected into the result as context. The bus never throws (it degrades to
+// warn internally), so hooks cannot wedge the loop.
 //
 // Every failure becomes a failed tool_result, never a thrown turn-ender (L9):
 // the model sees the error and self-repairs. Calls are launched up front so
@@ -27,14 +36,22 @@ export interface ExecDeps {
   gate: RwGate;
   budget: MessageBudget;
   ctx: ToolCtx;
+  /** Optional lifecycle hooks. Absent → no dispatch, behavior unchanged. */
+  hooks?: HookBus;
 }
 
 type Disposition =
   | { kind: 'failed'; content: string }
-  | { kind: 'launched'; run: Promise<{ content: string; uiData?: unknown }> };
+  | { kind: 'launched'; name: string; notes: readonly string[]; run: Promise<{ content: string; uiData?: unknown }> };
 
 function gateMode(spec: ToolSpec, input: unknown): GateMode {
   return spec.concurrencySafe(input) ? 'read' : 'write';
+}
+
+// Join a tool's raw output with any hook-injected context/warnings, dropping
+// empties so a result with no notes is byte-identical to the un-hooked path.
+function compose(parts: readonly string[]): string {
+  return parts.filter((p) => p !== '').join('\n\n');
 }
 
 async function decide(callItem: PendingCall, deps: ExecDeps): Promise<Disposition> {
@@ -67,11 +84,23 @@ async function decide(callItem: PendingCall, deps: ExecDeps): Promise<Dispositio
     return { kind: 'failed', content: `permission denied for ${spec.name}` };
   }
 
+  // PreToolUse fires only after the gate has allowed the call. A block here
+  // stops the tool before it runs; allow/warn notes ride along to the result.
+  const notes: string[] = [];
+  if (deps.hooks !== undefined) {
+    const pre = await deps.hooks.dispatch('PreToolUse', { tool: spec.name, input });
+    if (pre.decision === 'block') {
+      const why = pre.messages.length > 0 ? pre.messages.join('\n') : 'a PreToolUse hook blocked this call';
+      return { kind: 'failed', content: why };
+    }
+    notes.push(...pre.contexts, ...pre.messages);
+  }
+
   // Launch now so concurrency-safe calls overlap; the RwGate serializes writes.
   const run = deps.gate
     .run(gateMode(spec, input), () => spec.run(input, deps.ctx))
     .then((out) => ({ content: out.content, ...(out.uiData === undefined ? {} : { uiData: out.uiData }) }));
-  return { kind: 'launched', run };
+  return { kind: 'launched', name: spec.name, notes, run };
 }
 
 export async function* executeTools(
@@ -97,7 +126,8 @@ export async function* executeTools(
     dispositions.push(await decision);
   }
 
-  // Phase 2 — in call order: collect outcomes, budget-fit, emit tool_end.
+  // Phase 2 — in call order: collect outcomes, run PostToolUse, budget-fit,
+  // emit tool_end.
   const results: ToolResultInput[] = [];
   for (let i = 0; i < calls.length; i++) {
     const c = calls[i] as PendingCall;
@@ -105,10 +135,12 @@ export async function* executeTools(
     let ok: boolean;
     let raw: string;
     let uiData: unknown;
+    let preNotes: readonly string[] = [];
     if (d.kind === 'failed') {
       ok = false;
       raw = d.content;
     } else {
+      preNotes = d.notes;
       try {
         const out = await d.run;
         ok = true;
@@ -126,7 +158,18 @@ export async function* executeTools(
         }
       }
     }
-    const fitted = await deps.budget.fit(c.callId, raw);
+
+    // PostToolUse sees the tool's actual output. A block flips an already-run
+    // result to failed; allow/warn notes append. Only fires for calls that ran.
+    let postNotes: readonly string[] = [];
+    if (deps.hooks !== undefined && d.kind === 'launched') {
+      const post = await deps.hooks.dispatch('PostToolUse', { tool: d.name, ok, output: raw });
+      if (post.decision === 'block') ok = false;
+      postNotes = [...post.contexts, ...post.messages];
+    }
+
+    const composed = compose([...preNotes, raw, ...postNotes]);
+    const fitted = await deps.budget.fit(c.callId, composed);
     results.push({ callId: c.callId, ok, content: fitted.content });
     const ui = uiData === undefined ? undefined : { kind: 'tool', data: uiData };
     yield { t: 'tool_end', callId: c.callId, ok, ...(ui === undefined ? {} : { ui }) };

@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, chmod, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatch, type DispatchPorts } from '../../../../src/ui/cli/dispatch.ts';
@@ -148,7 +148,7 @@ test('run streams a tool call through the real registry to completion', async ()
       kind: 'events',
       events: [
         { t: 'msg_start', model: 'scripted-1' },
-        { t: 'tool_call', callId: 'c1', name: 'write', input: { path: target, content: 'hi' } },
+        { t: 'tool_call', callId: 'c1', name: 'write', input: { file_path: target, content: 'hi' } },
         { t: 'msg_end', stop: 'tool_use', usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } },
       ],
     },
@@ -162,6 +162,55 @@ test('run streams a tool call through the real registry to completion', async ()
   );
   assert.equal(code, 0);
   assert.match(out.join(''), /done/);
+  assert.equal(await readFile(target, 'utf8'), 'hi');
+});
+
+test('run fires .vegito/hooks.json: a PreToolUse block hook stops the write', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const target = join(home, 'note.txt');
+  await mkdir(join(home, '.vegito'), { recursive: true });
+  const guard = join(home, '.vegito', 'guard.sh');
+  await writeFile(guard, '#!/usr/bin/env bash\necho "writes are frozen" >&2\nexit 2\n', 'utf8');
+  await chmod(guard, 0o755);
+  await writeFile(
+    join(home, '.vegito', 'hooks.json'),
+    JSON.stringify([{ event: 'PreToolUse', command: './guard.sh', matcher: 'write' }]),
+    'utf8',
+  );
+  const steps = [
+    {
+      kind: 'events',
+      events: [
+        { t: 'msg_start', model: 'scripted-1' },
+        { t: 'tool_call', callId: 'c1', name: 'write', input: { file_path: target, content: 'hi' } },
+        { t: 'msg_end', stop: 'tool_use', usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } },
+      ],
+    },
+    { kind: 'events', events: scriptedText('acknowledged the freeze') },
+  ];
+  const file = await scriptFile(steps);
+  const { out, ports } = collector();
+  const code = await dispatch(
+    ['run', '-p', 'write a note', '--script', file, '--mode', 'bypass', '--cwd', home],
+    ports({ homeDir: home, cwd: home }),
+  );
+  assert.equal(code, 0);
+  assert.match(out.join(''), /acknowledged the freeze/);
+  await assert.rejects(() => readFile(target, 'utf8'), 'the hook must stop the write before it happens');
+});
+
+test('run aborts loud when .vegito/hooks.json is malformed (guardrails must not silently drop)', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  await mkdir(join(home, '.vegito'), { recursive: true });
+  await writeFile(join(home, '.vegito', 'hooks.json'), '{ not json', 'utf8');
+  const file = await scriptFile([{ kind: 'events', events: scriptedText('never reached') }]);
+  const { err, ports } = collector();
+  const code = await dispatch(
+    ['run', '-p', 'hi', '--script', file, '--cwd', home],
+    ports({ homeDir: home, cwd: home }),
+  );
+  assert.equal(code, 1);
+  assert.match(err.join(''), /hooks\.json/);
 });
 
 test('forge --offline with flags writes a validated pack and exits 0', async () => {

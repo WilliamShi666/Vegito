@@ -10,6 +10,8 @@
 // or unreadable hook degrades to warn rather than wedging the loop.
 
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 export const HOOK_EVENTS = [
   'PreToolUse',
@@ -119,6 +121,46 @@ export function createHookBus(hooks: readonly HookSpec[], opts: HookBusOpts): Ho
 
 export interface SpawnRunnerOpts {
   readonly timeoutMs?: number;
+}
+
+// Loads a user-level hooks.json (e.g. ./.vegito/hooks.json): an array of
+// {event, command, matcher?}. A missing file means no hooks; a malformed file
+// throws — hooks are guardrails, so silently dropping them would be the unsafe
+// failure mode. Relative commands resolve against the file's own directory.
+// (Pack hooks take a stricter path: ExtensionRegistry.installPack re-validates
+// commands to stay inside the pack root, because packs are third-party.)
+export async function loadHooksFile(file: string): Promise<readonly HookSpec[]> {
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    return [];
+  }
+  let entries: unknown;
+  try {
+    entries = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${file} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(entries)) throw new Error(`${file} must be an array of hook entries`);
+  const base = dirname(file);
+  return entries.map((raw, i) => {
+    const e = raw as { event?: unknown; command?: unknown; matcher?: unknown };
+    if (typeof e.event !== 'string' || !(HOOK_EVENTS as readonly string[]).includes(e.event)) {
+      throw new Error(`${file} entry ${i} has an unknown event: ${String(e.event)}`);
+    }
+    if (typeof e.command !== 'string' || e.command === '') {
+      throw new Error(`${file} entry ${i} is missing a command`);
+    }
+    if (e.matcher !== undefined && typeof e.matcher !== 'string') {
+      throw new Error(`${file} entry ${i} matcher must be a string`);
+    }
+    return {
+      event: e.event as HookEvent,
+      command: isAbsolute(e.command) ? e.command : resolve(base, e.command),
+      ...(e.matcher === undefined ? {} : { matcher: e.matcher }),
+    };
+  });
 }
 
 const DEFAULT_HOOK_TIMEOUT_MS = 10_000;
