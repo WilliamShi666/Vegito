@@ -43,3 +43,26 @@ export type ProviderEvent =
   | { t: 'thinking_delta'; text: string }
   | { t: 'tool_call'; callId: string; name: string; input: unknown }
   | { t: 'msg_end'; stop: StopReason; usage: Usage };
+
+export interface ToolDef {
+  name: string;
+  description: string;
+  inputSchema: unknown; // JSON Schema, passed through to the wire verbatim
+}
+
+// What the kernel asks of any provider — no vendor names anywhere. `system`
+// is an ordered list of tiers; the stable prefix must stay byte-identical
+// across calls (D4), so wires may mark the tail cacheable but never reorder.
+export interface NeutralRequest {
+  model: string;
+  system: readonly string[];
+  messages: readonly NeutralMsg[];
+  tools: readonly ToolDef[];
+  maxTokens: number;
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
+}
+
+export interface WireProtocol {
+  readonly name: string;
+  send(req: NeutralRequest, signal: AbortSignal): AsyncIterable<ProviderEvent>;
+}
