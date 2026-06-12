@@ -10,7 +10,7 @@
 // credentials.ts (A5); this module only orchestrates.
 
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import { platform } from 'node:os';
 import { parseArgs, type ParsedCommand } from './args.ts';
 import { runHeadless } from '../headless.ts';
@@ -35,6 +35,10 @@ import { validatePack } from '../../extend/pack-validate.ts';
 import { planFromFlags, inferPlan, interview, planToSpec, type ForgePlan } from '../../forge/interview.ts';
 import { generatePack } from '../../forge/generate.ts';
 import { enrichSpec } from '../../forge/enrich.ts';
+import { observe, propose, applyProposals, revert, buildReviewer, type Gate } from '../../evolve/index.ts';
+import { countNegativeConstraints } from '../../extend/pack-validate.ts';
+import { createEngine } from '../../permissions/engine.ts';
+import type { PermKey } from '../../tools/spec.ts';
 import { BUILTIN_CATALOG } from '../../providers/catalog.ts';
 import { resolveProfile } from '../../providers/profile.ts';
 import { credentialFromEnv } from '../../providers/credentials.ts';
@@ -66,7 +70,8 @@ function usage(): string {
     '  sessions list|resume <sid>|fork <sid> <recordId>',
     '  packs list|validate <dir>',
     '  forge [--offline] [--archetype id] [--domain "..."] [--name id] [--from docs] [--out dir]',
-    '  evolve       (review and apply learned improvements)',
+    '  evolve <pack> --session <sid> [--mode ...] [--script file]   (review a session, apply learned improvements)',
+    '  evolve revert <pack>                                         (undo the last applied batch)',
     '  version | help',
     '',
   ].join('\n');
@@ -363,6 +368,102 @@ async function resolveForgePlan(
   return interview(ask);
 }
 
+// Build a gate that routes every proposal through the permission engine — the
+// same gate any write faces. A proposal's target is resolved to an absolute
+// path under the pack root; a non-allow verdict (deny, or an ask that nothing
+// settles in this non-interactive path) fails closed.
+function buildEvolveGate(root: string, mode: PermissionMode): Gate {
+  const engine = createEngine({ workspace: root, mode, rules: [] });
+  return async (p): Promise<'allow' | 'deny'> => {
+    const rel = p.kind === 'pack_edit' ? p.target : `memory/${p.to}.md`;
+    const key: PermKey = { tool: 'evolve', action: 'write', target: join(root, rel) };
+    const res = await engine.check(key);
+    return res === 'allow' ? 'allow' : 'deny';
+  };
+}
+
+async function cmdEvolve(c: Extract<ParsedCommand, { cmd: 'evolve' }>, ports: DispatchPorts): Promise<number> {
+  const root = isAbsolute(c.pack) ? c.pack : join(ports.cwd, c.pack);
+
+  // A pack must exist and validate before we touch it either way.
+  const pre = await validatePack(root);
+  if (!pre.ok) {
+    ports.writeErr(`pack at ${root} is not valid:\n`);
+    for (const p of pre.problems) ports.writeErr(`  - ${p}\n`);
+    return 1;
+  }
+
+  if (c.sub === 'revert') {
+    const rec = await revert(root);
+    if (rec === undefined) {
+      ports.write('nothing to revert\n');
+      return 0;
+    }
+    ports.write(`reverted "${c.pack}" from ${rec.version} to ${rec.prevVersion}\n`);
+    return 0;
+  }
+
+  // run: review one session, propose, apply through the gate.
+  if (c.session === undefined) {
+    ports.writeErr('evolve run needs --session <sid> to review\n');
+    return 2;
+  }
+  const store = createStore({ root: join(ports.homeDir, '.vegito', 'sessions'), appVersion: APP_VERSION });
+  let messages;
+  try {
+    messages = await store.resolve(ports.cwd, c.session);
+  } catch (err) {
+    ports.writeErr(`cannot resolve session ${c.session}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const loaded = await loadConfig({ homeDir: ports.homeDir, cwd: ports.cwd });
+  const cfg = loaded.config;
+  const signal = ports.signal ?? new AbortController().signal;
+  let callModel: CallModel;
+  try {
+    ({ callModel } = await buildCallModel(cfg.model, c.script));
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const reviewer = buildReviewer(callModel, signal, cfg.model);
+  const observations = await observe(c.session, messages, reviewer);
+  if (observations.length === 0) {
+    ports.write('no observations — pack unchanged\n');
+    return 0;
+  }
+
+  // Budget the persona constraints against what is already there.
+  let personaNegatives = 0;
+  try {
+    personaNegatives = countNegativeConstraints(await readFile(join(root, 'persona.md'), 'utf8'));
+  } catch {
+    personaNegatives = 0;
+  }
+
+  const proposals = propose(observations, { personaNegatives });
+  if (proposals.length === 0) {
+    ports.write(`${observations.length} observation(s), no actionable proposals — pack unchanged\n`);
+    return 0;
+  }
+
+  const gate = buildEvolveGate(root, c.mode ?? 'acceptEdits');
+  const result = await applyProposals(root, proposals, gate, { sids: [c.session] });
+
+  if (result.problems && result.problems.length > 0) {
+    ports.writeErr(`proposals failed validation — pack rolled back:\n`);
+    for (const p of result.problems) ports.writeErr(`  - ${p}\n`);
+    return 1;
+  }
+  ports.write(
+    `evolve: ${observations.length} observation(s) → ${result.applied.length} applied, ${result.denied.length} denied\n`,
+  );
+  if (result.applied.length > 0) ports.write(`  revert with: vegito evolve revert ${c.pack}\n`);
+  return 0;
+}
+
 export async function dispatch(argv: readonly string[], ports: DispatchPorts): Promise<number> {
   const cmd = parseArgs(argv);
   switch (cmd.cmd) {
@@ -386,8 +487,7 @@ export async function dispatch(argv: readonly string[], ports: DispatchPorts): P
     case 'forge':
       return cmdForge(cmd, ports);
     case 'evolve':
-      ports.writeErr('evolve arrives in a later phase\n');
-      return 1;
+      return cmdEvolve(cmd, ports);
     default: {
       const _exhaustive: never = cmd;
       void _exhaustive;
