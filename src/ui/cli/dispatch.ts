@@ -32,6 +32,9 @@ import type { SkillSource, SkillMeta } from '../../tools/builtin/skill.ts';
 import { createStore } from '../../sessions/store.ts';
 import { loadPack } from '../../extend/packs.ts';
 import { validatePack } from '../../extend/pack-validate.ts';
+import { planFromFlags, inferPlan, interview, planToSpec, type ForgePlan } from '../../forge/interview.ts';
+import { generatePack } from '../../forge/generate.ts';
+import { enrichSpec } from '../../forge/enrich.ts';
 import { BUILTIN_CATALOG } from '../../providers/catalog.ts';
 import { resolveProfile } from '../../providers/profile.ts';
 import { credentialFromEnv } from '../../providers/credentials.ts';
@@ -62,7 +65,7 @@ function usage(): string {
     '  repl [--model m] [--mode ...] [--cwd dir]',
     '  sessions list|resume <sid>|fork <sid> <recordId>',
     '  packs list|validate <dir>',
-    '  forge        (meta-harness: build a custom pack)',
+    '  forge [--offline] [--archetype id] [--domain "..."] [--name id] [--from docs] [--out dir]',
     '  evolve       (review and apply learned improvements)',
     '  version | help',
     '',
@@ -124,7 +127,7 @@ function buildRegistry(memoryDir: string): { registry: ToolRegistry; builtins: B
 }
 
 async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: DispatchPorts): Promise<number> {
-  const cwd = c.cwd ?? ports.cwd;
+  const cwd = ports.cwd;
   const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
   for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const config = effectiveConfig(loaded.config, c);
@@ -172,7 +175,7 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
     ports.writeErr('repl requires an input stream\n');
     return 1;
   }
-  const cwd = c.cwd ?? ports.cwd;
+  const cwd = ports.cwd;
   const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
   for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const config = effectiveConfig(loaded.config, c);
@@ -274,6 +277,92 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
   }
 }
 
+// forge: resolve a plan (from docs, flags, or an interactive interview) → spec →
+// optional model enrichment (online only) → write files → validate. Offline is
+// deterministic and provider-free; the acceptance path. Output goes to --out or
+// ./<pack-name> under cwd.
+async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: DispatchPorts): Promise<number> {
+  const plan = await resolveForgePlan(c, ports);
+  if (plan === undefined) return 2; // message already written
+  if ('error' in plan) {
+    ports.writeErr(`${plan.error}\n`);
+    return 2;
+  }
+
+  let spec = planToSpec(plan);
+
+  // Online path: one bounded model call refines the persona. Never fatal — if
+  // no seam is available we keep the template persona and say so.
+  if (!c.offline) {
+    try {
+      const loaded = await loadConfig({ homeDir: ports.homeDir, cwd: ports.cwd });
+      const cfg = loaded.config;
+      const { callModel } = await buildCallModel(cfg.model, c.script);
+      spec = await enrichSpec(spec, callModel, ports.signal ?? new AbortController().signal, cfg.model);
+    } catch (err) {
+      ports.writeErr(`note: persona enrichment skipped (${err instanceof Error ? err.message : String(err)})\n`);
+    }
+  }
+
+  const outDir = c.out ?? join(ports.cwd, spec.name);
+  try {
+    await generatePack(outDir, spec);
+  } catch (err) {
+    ports.writeErr(`forge failed to write pack: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const result = await validatePack(outDir);
+  if (!result.ok) {
+    ports.writeErr(`forged pack failed validation — ${result.problems.length} problem(s):\n`);
+    for (const p of result.problems) ports.writeErr(`  - ${p}\n`);
+    return 1;
+  }
+
+  ports.write(`forged pack "${spec.name}" (${plan.archetype}) at ${outDir}\n`);
+  ports.write(`  ${spec.agents.length} agents, ${spec.rubrics.length} rubric(s) — validated clean\n`);
+  ports.write(`  enable with: vegito packs validate ${outDir}\n`);
+  return 0;
+}
+
+// Returns a plan, an {error}, or undefined when it already wrote a usage message.
+async function resolveForgePlan(
+  c: Extract<ParsedCommand, { cmd: 'forge' }>,
+  ports: DispatchPorts,
+): Promise<ForgePlan | { error: string } | undefined> {
+  if (c.from !== undefined) {
+    let docs: string;
+    try {
+      docs = await readFile(c.from, 'utf8');
+    } catch (err) {
+      ports.writeErr(`cannot read --from ${c.from}: ${err instanceof Error ? err.message : String(err)}\n`);
+      return undefined;
+    }
+    return inferPlan(docs, c.name);
+  }
+
+  // Flags fully specify the plan when a domain is present (required for offline).
+  if (c.offline || c.domain !== undefined) {
+    return planFromFlags({
+      ...(c.archetype !== undefined ? { archetype: c.archetype } : {}),
+      ...(c.domain !== undefined ? { domain: c.domain } : {}),
+      ...(c.name !== undefined ? { name: c.name } : {}),
+    });
+  }
+
+  // Interactive: needs a line source.
+  if (ports.nextLine === undefined) {
+    return { error: 'forge needs --domain (or an interactive terminal) to proceed' };
+  }
+  const next = ports.nextLine;
+  const ask = async (question: string): Promise<string> => {
+    ports.write(`${question}\n> `);
+    const line = await next();
+    return line ?? '';
+  };
+  return interview(ask);
+}
+
 export async function dispatch(argv: readonly string[], ports: DispatchPorts): Promise<number> {
   const cmd = parseArgs(argv);
   switch (cmd.cmd) {
@@ -295,8 +384,7 @@ export async function dispatch(argv: readonly string[], ports: DispatchPorts): P
     case 'packs':
       return cmdPacks(cmd, ports);
     case 'forge':
-      ports.writeErr('forge arrives in a later phase\n');
-      return 1;
+      return cmdForge(cmd, ports);
     case 'evolve':
       ports.writeErr('evolve arrives in a later phase\n');
       return 1;

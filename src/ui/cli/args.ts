@@ -22,7 +22,16 @@ export type ParsedCommand =
     }
   | { readonly cmd: 'sessions'; readonly sub: 'list' | 'resume' | 'fork'; readonly target?: string; readonly at?: string }
   | { readonly cmd: 'packs'; readonly sub: 'list' | 'validate'; readonly path?: string }
-  | { readonly cmd: 'forge' }
+  | {
+      readonly cmd: 'forge';
+      readonly offline: boolean;
+      readonly archetype?: string;
+      readonly domain?: string;
+      readonly name?: string;
+      readonly from?: string;
+      readonly out?: string;
+      readonly script?: string;
+    }
   | { readonly cmd: 'evolve' }
   | { readonly cmd: 'version' }
   | { readonly cmd: 'help' }
@@ -34,8 +43,8 @@ interface Flags {
   readonly positionals: readonly string[];
 }
 
-const VALUE_FLAGS = new Set(['model', 'mode', 'cwd', 'script', 'p', 'prompt']);
-const BOOL_FLAGS = new Set(['json']);
+const VALUE_FLAGS = new Set(['model', 'mode', 'cwd', 'script', 'p', 'prompt', 'archetype', 'domain', 'name', 'from', 'out']);
+const BOOL_FLAGS = new Set(['json', 'offline']);
 
 function parseFlags(args: readonly string[]): Flags | { error: string } {
   const values: Record<string, string> = {};
@@ -83,7 +92,20 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
   }
   if (head === '--version' || head === '-v' || head === 'version') return { cmd: 'version' };
   if (head === '--help' || head === '-h' || head === 'help') return { cmd: 'help' };
-  if (head === 'forge') return { cmd: 'forge' };
+  if (head === 'forge') {
+    const f = parseFlags(argv.slice(1));
+    if ('error' in f) return { cmd: 'error', message: f.error };
+    return {
+      cmd: 'forge',
+      offline: f.bools.has('offline'),
+      ...opt('archetype', f.values.archetype),
+      ...opt('domain', f.values.domain),
+      ...opt('name', f.values.name),
+      ...opt('from', f.values.from),
+      ...opt('out', f.values.out),
+      ...opt('script', f.values.script),
+    };
+  }
   if (head === 'evolve') return { cmd: 'evolve' };
 
   if (head === 'run') {

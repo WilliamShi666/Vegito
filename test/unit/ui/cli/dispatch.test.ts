@@ -163,3 +163,63 @@ test('run streams a tool call through the real registry to completion', async ()
   assert.equal(code, 0);
   assert.match(out.join(''), /done/);
 });
+
+test('forge --offline with flags writes a validated pack and exits 0', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-forge-'));
+  const out = join(home, 'mypack');
+  const { out: stdout, ports } = collector();
+  const code = await dispatch(
+    ['forge', '--offline', '--archetype', 'tutor-team', '--domain', 'IELTS writing', '--out', out],
+    ports({ homeDir: home, cwd: home }),
+  );
+  assert.equal(code, 0);
+  assert.match(stdout.join(''), /forged pack/);
+  assert.match(stdout.join(''), /validated clean/);
+});
+
+test('forge --offline without a domain exits 2 with guidance', async () => {
+  const { err, ports } = collector();
+  const code = await dispatch(['forge', '--offline', '--archetype', 'review-team'], ports({}));
+  assert.equal(code, 2);
+  assert.match(err.join(''), /domain/);
+});
+
+test('forge --offline with an unknown archetype exits 2', async () => {
+  const { err, ports } = collector();
+  const code = await dispatch(['forge', '--offline', '--archetype', 'nope', '--domain', 'x'], ports({}));
+  assert.equal(code, 2);
+  assert.match(err.join(''), /unknown archetype/);
+});
+
+test('forge --from infers archetype and domain from a docs file', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-forge-'));
+  const docs = join(home, 'brief.md');
+  await writeFile(docs, '# Pull Request Reviewer\nWe audit code for security and correctness issues.', 'utf8');
+  const out = join(home, 'forged');
+  const { out: stdout, ports } = collector();
+  const code = await dispatch(
+    ['forge', '--offline', '--from', docs, '--out', out],
+    ports({ homeDir: home, cwd: home }),
+  );
+  assert.equal(code, 0);
+  assert.match(stdout.join(''), /review-team/);
+});
+
+test('forge interactive uses the nextLine port to interview', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-forge-'));
+  const out = join(home, 'interviewed');
+  const answers = ['content-studio', 'blog posts', '', null];
+  let i = 0;
+  const nextLine = async (): Promise<string | null> => answers[i++] ?? null;
+  const { out: stdout, ports } = collector();
+  // no --offline, no --domain, no --from → interactive path. --script keeps the
+  // online enrichment offline (deterministic), so the test needs no network.
+  const script = await scriptFile([{ kind: 'events', events: scriptedText('A refined studio persona.') }]);
+  const code = await dispatch(
+    ['forge', '--out', out, '--script', script],
+    ports({ homeDir: home, cwd: home, nextLine }),
+  );
+  assert.equal(code, 0);
+  assert.match(stdout.join(''), /content-studio/);
+});
+
