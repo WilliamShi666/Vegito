@@ -19,7 +19,7 @@ Run `vegito help` for the synopsis, `vegito version` for the version.
 ### `run` — one-shot, headless
 
 ```sh
-vegito run -p "<prompt>" [--json] [--model <id>] [--mode <mode>] [--cwd <dir>] [--script <file>]
+vegito run -p "<prompt>" [--json] [--model <id>] [--mode <mode>] [--cwd <dir>] [--pack <pack>] [--script <file>]
 ```
 
 Runs a single turn to completion, prints the result, and exits with a status code that
@@ -27,6 +27,7 @@ reflects how the turn ended (`0` for a clean finish, non-zero for an error-class
 Use `--json` to emit one JSON object per line (the `LoopEvent` stream) instead of rendered
 text — convenient for piping into other tools. `--script <file>` replaces the live
 provider with the offline scripted wire (see *Offline & scripted runs* below).
+Use `--pack <pack>` to load a generated domain harness for the turn.
 
 ```sh
 vegito run -p "list the largest files in src and explain the biggest one"
@@ -36,11 +37,13 @@ vegito run --json -p "summarize the test suite" | jq 'select(.t == "text_delta")
 ### `repl` — interactive
 
 ```sh
-vegito repl [--model <id>] [--mode <mode>] [--cwd <dir>]
+vegito repl [--model <id>] [--mode <mode>] [--cwd <dir>] [--pack <pack>] [--script <file>]
 ```
 
 Starts an interactive session. The same `LoopEvent` stream that `run --json` serializes is
-rendered as text here.
+rendered as text here. Loaded pack commands are available as slash commands and execute
+real model turns, for example `/toefl-diagnose ...`, `/churn-run-pipeline ...`, or
+`/admissions-profile-review ...`.
 
 ### `sessions` — history
 
@@ -59,19 +62,21 @@ session so you can explore an alternative path without disturbing the original.
 ```sh
 vegito packs list
 vegito packs validate <dir>
+vegito packs validate-output <pack> <candidate-file>
 vegito packs trust <pack>
 ```
 
 `validate` runs the full manifest + filesystem check on a pack directory and reports every
 problem (or confirms it is valid). Run it after editing a pack by hand. See
-[PACK_AUTHORING.md](./PACK_AUTHORING.md). `trust` records explicit trust for a pack that
-needs executable hooks; untrusted packs can still contribute persona, skills, commands,
-and non-executable hooks.
+[PACK_AUTHORING.md](./PACK_AUTHORING.md). `validate-output` runs the pack's rubric
+validators against a saved candidate answer or artifact summary and reports pass/fail.
+`trust` records explicit trust for a pack that needs executable hooks; untrusted packs can
+still contribute persona, skills, commands, and non-executable hooks.
 
 ### `forge` — generate a domain pack (the meta-harness)
 
 ```sh
-vegito forge [--offline] [--archetype <id>] [--domain "<text>"] [--name <id>] \
+vegito forge [--native] [--offline] [--archetype <id>] [--domain "<text>"] [--name <id>] \
              [--from <docs>] [--out <dir>]
 ```
 
@@ -79,12 +84,15 @@ Generates a complete pack — a team of role-specialized agents, grading rubrics
 validators, memory seeds, and onboarding — for a domain.
 
 - `--offline` makes forging fully deterministic and provider-free. Requires `--domain`.
+- `--native` asks the model for a domain blueprint and compiles it directly into a runtime
+  pack without using archetype templates. This is the path for testing Vegito as a
+  meta-harness compiler.
 - `--archetype` selects the team shape: `tutor-team`, `review-team`, or `content-studio`.
   Defaults to `tutor-team`.
 - `--domain` is the field the pack serves, e.g. `"IELTS writing and speaking"`.
 - `--name` overrides the pack id (otherwise derived from the domain).
 - `--from <docs>` infers the archetype and domain from a documents file instead of flags.
-- `--out` is the output directory (otherwise `./<pack-name>`).
+- `--out` is the output directory. If omitted, Forge writes to `generated/<pack-name>` under the current workspace.
 
 Without `--offline`, Vegito additionally makes one bounded model call to refine the
 persona. That step is never required and never fatal — if no provider is available the
@@ -93,6 +101,15 @@ template persona is kept and a note is printed.
 ```sh
 vegito forge --offline --archetype tutor-team \
   --domain "IELTS writing and speaking" --name ielts --out packs/ielts
+```
+
+Native Forge prints the runtime commands after a successful generation:
+
+```sh
+vegito forge --native --domain "US undergraduate admissions counselor" --name admissions-counselor
+vegito packs validate generated/admissions-counselor
+vegito repl --pack generated/admissions-counselor
+vegito run --pack generated/admissions-counselor -p "Review this applicant profile..."
 ```
 
 ### `evolve` — improve a pack from real use

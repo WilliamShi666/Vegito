@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "name": "admissions-counselor",
+  "version": "1.0.0",
+  "description": "A US undergraduate application counseling harness.",
+  "persona": "./persona.md",
+  "grants": [
+    "memory"
+  ],
+  "agents": [
+    {
+      "name": "intake-strategist",
+      "model": "tier:fast",
+      "tools": [
+        "memory"
+      ],
+      "prompt": "./agents/intake-strategist.md"
+    },
+    {
+      "name": "school-list-architect",
+      "model": "tier:smart",
+      "tools": [
+        "memory"
+      ],
+      "prompt": "./agents/school-list-architect.md"
+    },
+    {
+      "name": "essay-activities-coach",
+      "model": "tier:smart",
+      "tools": [
+        "memory"
+      ],
+      "prompt": "./agents/essay-activities-coach.md"
+    },
+    {
+      "name": "compliance-guardian",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/compliance-guardian.md"
+    }
+  ],
+  "rubrics": [
+    {
+      "name": "admissions-plan-completeness",
+      "prompt": "./rubrics/admissions-plan-completeness.prompt.md",
+      "validator": "./rubrics/admissions-plan-completeness.validator.mjs"
+    }
+  ],
+  "modelTiers": {
+    "smart": "the strongest available reasoning tier for judgement-heavy work",
+    "fast": "a quick tier for routing, bookkeeping, and mechanical checks"
+  },
+  "onboarding": "./onboarding.md",
+  "commands": "./commands",
+  "evals": "./evals/cases.json",
+  "memory": {
+    "seeds": "./memory/seeds.md",
+    "promotion": "Promote repeated risks and confirmed preferences into applicant memory after each workflow."
+  }
+}

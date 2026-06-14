@@ -113,7 +113,7 @@ test('blueprintToSpec compiles native model output into active pack artifacts wi
   assert.equal(spec.name, 'native-toefl-speaking');
   assert.deepEqual(spec.agents.map((a) => a.name), ['intake-router', 'rubric-calibrator']);
   assert.equal(spec.rubrics[0]!.name, 'speaking-feedback');
-  assert.equal(spec.commands?.[0]?.name, 'baseline-speaking');
+  assert.equal(spec.commands?.[0]?.name, 'toefl-baseline-speaking');
   assert.equal(spec.evals?.[0]?.name, 'eval-1');
 
   const text = [
@@ -145,6 +145,39 @@ test('blueprintToSpec normalizes model-provided pack names to a safe slug', () =
 
   const spec = blueprintToSpec(parsed.value);
   assert.equal(spec.name, 'native-speaking-harness');
+});
+
+test('blueprintToSpec namespaces native commands and rejects recursive slash stubs', () => {
+  const badCommands = {
+    ...blueprint,
+    name: 'TOEFL Speaking Coach',
+    commands: [
+      {
+        name: 'diagnose',
+        description: 'Run a TOEFL speaking diagnosis.',
+        template: '/diagnose --audio $DATA_PATH',
+      },
+      {
+        name: 'toefl-drill',
+        description: 'Run a targeted TOEFL speaking drill.',
+        template: 'Create a drill from $ARGUMENTS and return evidence plus next action.',
+      },
+    ],
+  };
+  const parsed = parseBlueprintText(JSON.stringify(badCommands));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const spec = blueprintToSpec(parsed.value);
+  assert.deepEqual(spec.commands?.map((command) => command.name), ['toefl-diagnose', 'toefl-drill']);
+  const diagnose = spec.commands?.[0];
+  assert.ok(diagnose);
+  assert.doesNotMatch(diagnose.template, /^\/diagnose\b/);
+  assert.doesNotMatch(diagnose.template, /\$DATA_PATH/);
+  assert.match(diagnose.template, /\$ARGUMENTS/);
+  assert.match(diagnose.template, /TOEFL speaking diagnosis/i);
+  assert.match(diagnose.template, /score/i);
+  assert.match(diagnose.template, /evidence/i);
 });
 
 test('parseBlueprintText synthesizes eval cases when the model omits that non-core field', () => {
@@ -218,8 +251,68 @@ test('blueprintToSpec normalizes native tool declarations to the real Vegito too
   if (!parsed.ok) return;
 
   const spec = blueprintToSpec(parsed.value);
-  assert.deepEqual(spec.grants, ['read', 'fetch']);
+  assert.deepEqual(spec.grants, ['read', 'fetch', 'memory']);
   assert.deepEqual(spec.agents[0]?.tools, ['read', 'fetch']);
+});
+
+test('blueprintToSpec infers practical local-analysis grants for data-science harnesses', () => {
+  const dataScience = {
+    ...blueprint,
+    name: 'customer-churn-analysis-harness',
+    description: 'A customer churn data science analysis harness.',
+    targetUser: 'A data science team.',
+    jobToBeDone: 'Analyze a local churn dataset and produce reproducible artifacts.',
+    taskTaxonomy: ['schema inspection', 'data quality checks', 'EDA', 'artifact outputs', 'reproducibility verification'],
+    roles: [
+      {
+        name: 'schema-inspector',
+        tier: 'fast',
+        tools: [],
+        mission: 'Inspect local dataset schema.',
+        workflow: ['find dataset', 'read schema', 'flag risks'],
+        outputContract: ['Report schema and assumptions.'],
+      },
+      {
+        name: 'eda-analyst',
+        tier: 'smart',
+        tools: [],
+        mission: 'Run local descriptive analysis.',
+        workflow: ['read data', 'run checks', 'write artifacts'],
+        outputContract: ['Every claim cites data evidence.'],
+      },
+      {
+        name: 'causal-guard',
+        tier: 'smart',
+        tools: [],
+        mission: 'Review analysis text for unsupported causal claims.',
+        workflow: ['read report', 'rewrite claims'],
+        outputContract: ['Causal approval or rejection is explicit.'],
+      },
+    ],
+    toolGrants: [],
+    dataQualityGates: ['Check missingness and duplicate rows before EDA.'],
+    artifactOutputs: [
+      {
+        name: 'analysis-report',
+        path: 'artifacts/report.md',
+        description: 'A reproducible churn analysis report.',
+        requiredSignals: ['schema', 'quality_pass', 'eda_complete'],
+      },
+    ],
+    verificationPath: {
+      steps: ['Re-run analysis from raw data.'],
+      successCriteria: ['artifact paths present'],
+    },
+  };
+  const parsed = parseBlueprintText(JSON.stringify(dataScience));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const spec = blueprintToSpec(parsed.value);
+  assert.deepEqual([...spec.grants].sort(), ['bash', 'glob', 'ls', 'memory', 'read', 'write']);
+  assert.deepEqual([...(spec.agents.find((agent) => agent.name === 'schema-inspector')?.tools ?? [])].sort(), ['glob', 'ls', 'read']);
+  assert.deepEqual([...(spec.agents.find((agent) => agent.name === 'eda-analyst')?.tools ?? [])].sort(), ['bash', 'read', 'write']);
+  assert.deepEqual([...(spec.agents.find((agent) => agent.name === 'causal-guard')?.tools ?? [])].sort(), ['read', 'write']);
 });
 
 test('blueprintToSpec keeps model tiers abstract even if native output names vendors', () => {
@@ -381,4 +474,32 @@ test('forgeNativeSpec sends a template-isolated request without loading IELTS ex
   assert.doesNotMatch(promptText, /ielts-claude-skills/i);
   assert.doesNotMatch(promptText, /tutor-team/i);
   assert.doesNotMatch(promptText, /IELTS writing private tutor/i);
+});
+
+test('forgeNativeSpec uses the user domain as the command namespace when the model returns a generic name', async () => {
+  const genericNamedBlueprint = {
+    ...blueprint,
+    name: 'native-speaking-harness',
+    commands: [
+      {
+        name: 'baseline',
+        description: 'Run the baseline speaking workflow.',
+        template: 'Run baseline mode on $ARGUMENTS, then return score, evidence, error taxonomy, and drill.',
+      },
+    ],
+  };
+  const callModel = async function* (): AsyncGenerator<ProviderEvent> {
+    yield { t: 'msg_start', model: 'scripted-native' };
+    yield { t: 'text_delta', text: JSON.stringify(genericNamedBlueprint) };
+    yield { t: 'msg_end', stop: 'end_turn', usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } };
+  };
+
+  const spec = await forgeNativeSpec({
+    domain: 'TOEFL speaking coach',
+    callModel,
+    signal: new AbortController().signal,
+    model: 'scripted-native',
+  });
+
+  assert.equal(spec.commands?.[0]?.name, 'toefl-baseline');
 });

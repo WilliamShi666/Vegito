@@ -7,6 +7,8 @@ import type { CallModel } from '../ui/runtime.ts';
 import type { NeutralRequest } from '../providers/types.ts';
 import type { ForgeSpec, SpecAgent, SpecCommand, SpecEvalCase, SpecRubric } from './spec.ts';
 import { slug } from './spec.ts';
+import { commandsFor } from './native-commands.ts';
+import { toolGrantsFor, toolsForRole } from './native-tools.ts';
 
 export interface NativeMode {
   readonly name: string;
@@ -96,21 +98,6 @@ const DEFAULT_TIERS = {
   fast: 'a quick tier for routing, bookkeeping, and mechanical checks',
 } as const;
 
-const TOOL_ALIASES: Readonly<Record<string, string>> = {
-  'fs.read': 'read',
-  'file.read': 'read',
-  'filesystem.read': 'read',
-  'fs.write': 'write',
-  'file.write': 'write',
-  'filesystem.write': 'write',
-  shell: 'bash',
-  terminal: 'bash',
-  web: 'fetch',
-  http: 'fetch',
-} as const;
-
-const KNOWN_TOOLS = new Set(['agent', 'bash', 'bash_output', 'edit', 'fetch', 'glob', 'grep', 'ls', 'memory', 'read', 'skill', 'todo', 'write']);
-
 const NATIVE_SYSTEM = [
   'You are Vegito Forge native compiler. Produce one JSON object and nothing else.',
   'Do not copy from local exemplar packs, archetype templates, or existing domain examples.',
@@ -136,6 +123,8 @@ const NATIVE_SYSTEM = [
   '}',
   'Use label "band" only when the user explicitly requests an exam band scale; otherwise use "score".',
   'Model tiers are abstract capability hints, never vendor or concrete model names.',
+  'Command names must be namespaced by domain, such as "toefl-diagnose" or "churn-run-pipeline".',
+  'Command templates must be complete workflow prompts, must not start with another slash command, and may only use $ARGUMENTS or $1..$9 placeholders.',
 ].join('\n');
 
 export function parseBlueprintText(text: string): ParseResult {
@@ -148,12 +137,16 @@ export function parseBlueprintText(text: string): ParseResult {
   return parseBlueprint(raw);
 }
 
-export function blueprintToSpec(blueprint: NativeBlueprint, opts: { readonly nameOverride?: string } = {}): ForgeSpec {
+export function blueprintToSpec(
+  blueprint: NativeBlueprint,
+  opts: { readonly nameOverride?: string; readonly domainHint?: string } = {},
+): ForgeSpec {
   const tiers = tiersFor(blueprint);
+  const grants = toolGrantsFor(blueprint);
   const agents: readonly SpecAgent[] = blueprint.roles.map((role) => ({
     name: role.name,
     tier: role.tier in tiers ? role.tier : 'smart',
-    tools: normalizeTools(role.tools),
+    tools: toolsForRole(role, blueprint),
     prompt: rolePrompt(role, blueprint),
   }));
   const rubrics: readonly SpecRubric[] = blueprint.rubrics.map((rubric) => ({
@@ -161,8 +154,9 @@ export function blueprintToSpec(blueprint: NativeBlueprint, opts: { readonly nam
     prompt: rubricPrompt(rubric, blueprint),
     validator: validatorFor(rubric, blueprint),
   }));
+  const namespaceHints = [opts.domainHint, opts.nameOverride].filter((hint): hint is string => hint !== undefined);
   const commands: readonly SpecCommand[] | undefined =
-    blueprint.commands === undefined ? undefined : blueprint.commands.map((command) => ({ ...command }));
+    blueprint.commands === undefined ? undefined : commandsFor(blueprint, namespaceHints);
   const evals = evalCasesFor(blueprint);
 
   return {
@@ -180,7 +174,7 @@ export function blueprintToSpec(blueprint: NativeBlueprint, opts: { readonly nam
     },
     onboarding: onboardingPrompt(blueprint),
     tiers,
-    grants: normalizeTools(blueprint.toolGrants),
+    grants,
   };
 }
 
@@ -214,7 +208,10 @@ export async function forgeNativeSpec(opts: {
   const text = await collectText(opts.callModel, req, opts.signal);
   const parsed = parseBlueprintText(text);
   if (!parsed.ok) throw new Error(parsed.reason);
-  return blueprintToSpec(parsed.value, opts.name === undefined ? {} : { nameOverride: slug(opts.name) });
+  const specOpts: { nameOverride?: string; domainHint?: string } = {};
+  if (opts.name !== undefined) specOpts.nameOverride = slug(opts.name);
+  if (opts.domain !== undefined) specOpts.domainHint = opts.domain;
+  return blueprintToSpec(parsed.value, specOpts);
 }
 
 function nativeUserPrompt(domain: string | undefined, docs: string | undefined): string {
@@ -559,10 +556,6 @@ function evalCasesFor(blueprint: NativeBlueprint): readonly SpecEvalCase[] {
 
 function unique(items: readonly string[]): string[] {
   return [...new Set(items)];
-}
-
-function normalizeTools(tools: readonly string[]): string[] {
-  return unique(tools.map((tool) => TOOL_ALIASES[tool.trim().toLowerCase()] ?? tool.trim().toLowerCase()).filter((tool) => KNOWN_TOOLS.has(tool)));
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

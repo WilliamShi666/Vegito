@@ -36,7 +36,13 @@ export type ParsedCommand =
       readonly cwd?: string;
       readonly script?: string;
     }
-  | { readonly cmd: 'packs'; readonly sub: 'list' | 'validate' | 'trust'; readonly path?: string; readonly cwd?: string }
+  | {
+      readonly cmd: 'packs';
+      readonly sub: 'list' | 'validate' | 'validate-output' | 'trust';
+      readonly path?: string;
+      readonly candidate?: string;
+      readonly cwd?: string;
+    }
   | {
       readonly cmd: 'forge';
       readonly offline: boolean;
@@ -218,11 +224,17 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
     const f = parseFlags(argv.slice(1));
     if ('error' in f) return { cmd: 'error', message: f.error };
     const sub = f.positionals[0] ?? 'list';
-    if (sub !== 'list' && sub !== 'validate' && sub !== 'trust') return { cmd: 'error', message: `unknown packs subcommand: ${sub}` };
+    if (sub !== 'list' && sub !== 'validate' && sub !== 'validate-output' && sub !== 'trust') {
+      return { cmd: 'error', message: `unknown packs subcommand: ${sub}` };
+    }
     const path = f.positionals[1];
+    const candidate = f.positionals[2];
     if (sub === 'validate' && path === undefined) return { cmd: 'error', message: 'packs validate needs a pack directory' };
+    if (sub === 'validate-output' && (path === undefined || candidate === undefined)) {
+      return { cmd: 'error', message: 'packs validate-output needs <pack> <candidate-file>' };
+    }
     if (sub === 'trust' && path === undefined) return { cmd: 'error', message: 'packs trust needs a pack name or directory' };
-    return { cmd: 'packs', sub, ...opt('path', path), ...opt('cwd', f.values.cwd) };
+    return { cmd: 'packs', sub, ...opt('path', path), ...opt('candidate', candidate), ...opt('cwd', f.values.cwd) };
   }
 
   return { cmd: 'error', message: `unknown command: ${head}` };

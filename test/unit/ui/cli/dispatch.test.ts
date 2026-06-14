@@ -255,6 +255,52 @@ test('packs validate on a semantically broken pack lists problems and exits 1', 
   assert.match(err.join(''), /dup/);
 });
 
+test('packs validate-output runs pack rubric validators and reports pass or fail', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-pack-output-'));
+  const pack = join(home, 'pack');
+  await mkdir(join(pack, 'rubrics'), { recursive: true });
+  await writeFile(join(pack, 'rubrics', 'quality.prompt.md'), 'Require quality_pass and evidence.', 'utf8');
+  await writeFile(
+    join(pack, 'rubrics', 'quality.validator.mjs'),
+    [
+      '#!/usr/bin/env node',
+      'import { readFileSync } from "node:fs";',
+      'const text = readFileSync(0, "utf8").toLowerCase();',
+      'if (!text.includes("quality_pass") || !text.includes("evidence")) process.exit(1);',
+      'process.exit(0);',
+    ].join('\n'),
+    'utf8',
+  );
+  await writeFile(
+    join(pack, 'pack.json'),
+    JSON.stringify({
+      schema: 1,
+      name: 'validator-pack',
+      version: '1.0.0',
+      description: 'validator pack',
+      grants: [],
+      agents: [],
+      rubrics: [{ name: 'quality', prompt: './rubrics/quality.prompt.md', validator: './rubrics/quality.validator.mjs' }],
+      modelTiers: {},
+    }),
+    'utf8',
+  );
+  const good = join(home, 'good.md');
+  const bad = join(home, 'bad.md');
+  await writeFile(good, 'quality_pass with evidence', 'utf8');
+  await writeFile(bad, 'quality_pass only', 'utf8');
+
+  const goodRun = collector();
+  const goodCode = await dispatch(['packs', 'validate-output', pack, good], goodRun.ports({ homeDir: home, cwd: home }));
+  assert.equal(goodCode, 0);
+  assert.match(goodRun.out.join(''), /output valid/i);
+
+  const badRun = collector();
+  const badCode = await dispatch(['packs', 'validate-output', pack, bad], badRun.ports({ homeDir: home, cwd: home }));
+  assert.equal(badCode, 1);
+  assert.match(badRun.err.join(''), /validator failed/i);
+});
+
 test('run streams a tool call through the real registry to completion', async () => {
   // model asks to write a file, then (next call) ends the turn — exercises the
   // executor + permission engine + gate end-to-end via the scripted wire.
@@ -382,6 +428,47 @@ test('run with --pack installs pack persona, skills, commands, and non-executabl
   assert.equal(await readFile(target, 'utf8'), 'hi');
 });
 
+test('repl with --pack executes a namespaced pack slash command as a model turn', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const pack = join(home, 'toefl-pack');
+  await mkdir(join(pack, 'commands'), { recursive: true });
+  await writeFile(
+    join(pack, 'commands', 'toefl-diagnose.md'),
+    '---\ndescription: Diagnose a TOEFL speaking attempt.\n---\nRun TOEFL speaking diagnosis on $ARGUMENTS. Return score, evidence, error taxonomy, and drill.',
+    'utf8',
+  );
+  await writeFile(
+    join(pack, 'pack.json'),
+    JSON.stringify({
+      schema: 1,
+      name: 'toefl-pack',
+      version: '1.0.0',
+      description: 'TOEFL pack',
+      commands: './commands',
+      grants: [],
+      agents: [],
+      rubrics: [],
+      modelTiers: {},
+    }),
+    'utf8',
+  );
+  const script = await scriptFile([{ kind: 'events', events: scriptedText('diagnosed by model') }]);
+  const lines: (string | null)[] = ['/toefl-diagnose my sample answer', null];
+  let i = 0;
+  const nextLine = async (): Promise<string | null> => lines[i++] ?? null;
+  const { out, ports } = collector();
+
+  const code = await dispatch(
+    ['repl', '--pack', pack, '--script', script],
+    ports({ homeDir: home, cwd: home, nextLine }),
+  );
+
+  assert.equal(code, 0);
+  const text = out.join('');
+  assert.match(text, /diagnosed by model/);
+  assert.doesNotMatch(text, /^Run TOEFL speaking diagnosis on/m);
+});
+
 test('forge --offline with flags writes a validated pack and exits 0', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vegito-forge-'));
   const out = join(home, 'mypack');
@@ -498,9 +585,9 @@ test('forge --native compiles model blueprint without using the tutor archetype 
     toolGrants: [],
     commands: [
       {
-        name: 'native-baseline',
+        name: 'baseline',
         description: 'Run native baseline mode.',
-        template: 'Baseline $ARGUMENTS with score, evidence, error taxonomy, and drill.',
+        template: '/baseline --attempt $ATTEMPT',
       },
     ],
     examples: ['Baseline a speaking answer.'],
@@ -520,6 +607,7 @@ test('forge --native compiles model blueprint without using the tutor archetype 
 
   assert.equal(code, 0);
   assert.match(stdout.join(''), /native/);
+  assert.match(stdout.join(''), /vegito repl --pack/);
   const pack = JSON.parse(await readFile(join(out, 'pack.json'), 'utf8')) as {
     name: string;
     agents: { name: string }[];
@@ -532,16 +620,93 @@ test('forge --native compiles model blueprint without using the tutor archetype 
   assert.equal(pack.commands, './commands');
   assert.equal(pack.evals, './evals/cases.json');
   assert.match(await readFile(join(out, 'persona.md'), 'utf8'), /Job to be done/i);
-  assert.match(await readFile(join(out, 'commands', 'native-baseline.md'), 'utf8'), /Baseline \$ARGUMENTS/);
+  const command = await readFile(join(out, 'commands', 'toefl-baseline.md'), 'utf8');
+  assert.doesNotMatch(command, /^\/baseline/m);
+  assert.doesNotMatch(command, /\$ATTEMPT/);
+  assert.match(command, /\$ARGUMENTS/);
+  assert.match(command, /score/);
+  assert.match(command, /evidence/);
   assert.match(await readFile(join(out, 'evals', 'cases.json'), 'utf8'), /Reject a score without evidence/);
 
   const loaded = await loadPack(out);
   assert.equal(loaded.evalsPath, join(out, 'evals', 'cases.json'));
   const registry = createExtensionRegistry();
   await registry.installPack(loaded);
-  const rendered = registry.commands().render('native-baseline', 'response.txt');
+  const rendered = registry.commands().render('toefl-baseline', 'response.txt');
   assert.match(rendered ?? '', /response\.txt/);
-  assert.match(rendered ?? '', /error taxonomy/);
+  assert.match(rendered ?? '', /evidence/);
+});
+
+test('forge --native without --out writes the pack under generated/<pack-name>', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-forge-native-generated-'));
+  const blueprint = {
+    schema: 1,
+    name: 'college-application-agency',
+    version: '1.0.0',
+    description: 'A US undergraduate application counseling harness.',
+    targetUser: 'A high school student applying to US undergraduate programs.',
+    jobToBeDone: 'Create an ethical application plan with applicant memory.',
+    taskTaxonomy: ['intake', 'school-list strategy', 'timeline', 'activities', 'essays', 'recommendations', 'financial aid'],
+    modes: [
+      {
+        name: 'profile review',
+        trigger: 'new applicant profile',
+        workflow: ['collect intake', 'save applicant memory', 'return next actions'],
+        output: 'profile review',
+      },
+    ],
+    routing: ['Start with profile review when applicant memory is missing.'],
+    roles: [
+      {
+        name: 'intake-strategist',
+        tier: 'smart',
+        tools: ['memory'],
+        mission: 'Collect applicant profile and application constraints.',
+        workflow: ['ask missing fields', 'save memory', 'route next workflow'],
+        outputContract: ['State known fields, missing fields, and next actions.'],
+      },
+    ],
+    rubrics: [
+      {
+        name: 'admissions-plan-completeness',
+        prompt: 'Check intake, school list, timeline, activities, essays, recommendations, financial aid, ethics, memory, and next actions.',
+        requiredSignals: ['intake', 'school list', 'timeline', 'activities', 'essays', 'recommendations', 'financial aid', 'ethics', 'memory', 'next actions'],
+      },
+    ],
+    qualityGates: ['Ethics boundaries must be explicit.'],
+    evidenceContract: ['Every recommendation cites applicant-provided evidence or uncertainty.'],
+    errorTaxonomy: ['missing-intake', 'deadline-risk', 'financial-aid-blindspot'],
+    memoryPolicy: {
+      seeds: ['Track applicant profile, target schools, deadlines, essays, recommendation status, risks, and next actions.'],
+      promotion: 'Promote confirmed applicant preferences after each workflow.',
+    },
+    failurePolicy: ['Ask for missing intake before making high-confidence recommendations.'],
+    approvalGates: ['Ask before storing sensitive applicant details.'],
+    toolGrants: [],
+    commands: [
+      {
+        name: 'profile-review',
+        description: 'Run applicant intake and profile review.',
+        template: '/review-profile $PROFILE',
+      },
+    ],
+    examples: ['Review an applicant profile.'],
+    evalCases: ['Reject an output without intake, financial aid, ethics, memory, and next actions.'],
+    tiers: { smart: 'the strongest available reasoning tier', fast: 'a quick tier' },
+  };
+  const script = await scriptFile([{ kind: 'events', events: scriptedText(JSON.stringify(blueprint)) }]);
+  const { out: stdout, ports } = collector();
+
+  const code = await dispatch(
+    ['forge', '--native', '--domain', 'US undergraduate admissions counselor', '--script', script],
+    ports({ homeDir: home, cwd: home }),
+  );
+
+  const generated = join(home, 'generated', 'college-application-agency');
+  assert.equal(code, 0);
+  assert.match(stdout.join(''), new RegExp(`at ${generated.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(await readFile(join(generated, 'pack.json'), 'utf8'), /college-application-agency/);
+  assert.match(await readFile(join(generated, 'commands', 'admissions-profile-review.md'), 'utf8'), /\$ARGUMENTS/);
 });
 
 test('forge --native rejects archetype selection so native evals cannot use templates', async () => {

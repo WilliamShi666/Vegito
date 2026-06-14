@@ -53,22 +53,25 @@ describe('runRepl', () => {
     assert.match(s.text(), /echo: world/);
   });
 
-  test('a slash command is handled without starting a turn', async () => {
+  test('a slash command renders its template and starts a model turn', async () => {
     const s = sink();
+    const seen: string[] = [];
     let turns = 0;
     const ports: ReplPorts = {
-      nextLine: lineQueue(['/help', 'real prompt']),
+      nextLine: lineQueue(['/toefl-diagnose my sample answer', 'real prompt']),
       write: s.write,
       startTurn: (text) => {
         turns += 1;
+        seen.push(text);
         return answerTurn(text);
       },
       settleAsk: () => {},
-      commands: { help: () => 'available: /help' },
+      commands: { 'toefl-diagnose': (args) => `Run TOEFL diagnosis on: ${args}` },
     };
     await runRepl(ports);
-    assert.equal(turns, 1, 'only the non-command line starts a turn');
-    assert.match(s.text(), /available: \/help/);
+    assert.equal(turns, 2, 'the slash command and normal prompt both start turns');
+    assert.equal(seen[0], 'Run TOEFL diagnosis on: my sample answer');
+    assert.match(s.text(), /echo: Run TOEFL diagnosis on: my sample answer/);
     assert.match(s.text(), /echo: real prompt/);
   });
 

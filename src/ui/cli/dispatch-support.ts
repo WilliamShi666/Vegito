@@ -35,7 +35,7 @@ export function usage(): string {
     '  run -p <prompt> [--json] [--model m] [--mode default|acceptEdits|plan|bypass] [--cwd dir] [--script file]',
     '  repl [--model m] [--mode ...] [--cwd dir] [--pack p] [--script file]',
     '  sessions list|resume <sid>|fork <sid> <recordId>',
-    '  packs list|validate <dir>|trust <pack>',
+    '  packs list|validate <dir>|validate-output <pack> <candidate-file>|trust <pack>',
     '  forge [--native] [--offline] [--archetype id] [--domain "..."] [--name id] [--from docs] [--out dir]',
     '  evolve <pack> --session <sid> [--mode ...] [--script file] [--apply]  (review a session; apply only with --apply)',
     '  evolve eval <pack>                                                   (evaluate candidates without mutation)',

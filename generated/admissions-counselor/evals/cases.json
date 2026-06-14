@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "eval-1",
+      "prompt": "Reject an output that gives school-list advice without intake, financial aid, ethics, memory, and next actions.",
+      "requiredSignals": [
+        "intake",
+        "school list",
+        "timeline",
+        "activities",
+        "essays",
+        "recommendations",
+        "materials checklist",
+        "financial aid",
+        "ethics",
+        "memory",
+        "next actions"
+      ]
+    }
+  ]
+}

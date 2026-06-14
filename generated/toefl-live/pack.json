@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "description": "A domain harness for a TOEFL iBT speaking coach that diagnoses, drills, and provides evidence-based feedback with memory to help learners achieve a 24+ score.",
   "persona": "./persona.md",
-  "grants": [],
+  "grants": [
+    "memory"
+  ],
   "agents": [
     {
       "name": "Diagnostician",
@@ -27,7 +29,9 @@
     {
       "name": "MemoryKeeper",
       "model": "tier:fast",
-      "tools": [],
+      "tools": [
+        "memory"
+      ],
       "prompt": "./agents/memorykeeper.md"
     }
   ],

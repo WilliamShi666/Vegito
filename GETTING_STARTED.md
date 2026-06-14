@@ -207,6 +207,26 @@ vegito run --pack packs/ielts \
   -p "Score this IELTS Task 2 introduction and give one concrete next drill."
 ```
 
+如果要检验 Vegito 原生的 meta-harness 能力，而不是使用内置 archetype，可以用
+`forge --native` 让模型先生成领域 blueprint，再由 Vegito 编译成可运行 pack：
+
+```sh
+vegito forge --native \
+  --domain "US undergraduate admissions counselor" \
+  --name admissions-counselor
+
+vegito packs validate generated/admissions-counselor
+vegito repl --pack generated/admissions-counselor
+```
+
+Native 生成的 pack 如果声明了 slash commands，可以直接在 REPL 里输入，例如
+`/admissions-profile-review ...`。如果你把一次回答保存成文件，还可以跑 rubric
+validator：
+
+```sh
+vegito packs validate-output generated/admissions-counselor admissions-output.md
+```
+
 ## 10. 使用自进化 harness
 
 自进化的安全默认值是 review-only：没有 `--apply` 时，它只打印 observations/proposals，不改文件。

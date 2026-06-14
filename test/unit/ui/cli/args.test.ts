@@ -74,6 +74,11 @@ describe('parseArgs', () => {
     assert.equal(trust.cmd === 'packs' && trust.sub, 'trust');
     assert.equal(trust.cmd === 'packs' && trust.path, 'ielts');
 
+    const validateOutput = parseArgs(['packs', 'validate-output', 'ielts', 'answer.md']);
+    assert.equal(validateOutput.cmd === 'packs' && validateOutput.sub, 'validate-output');
+    assert.equal(validateOutput.cmd === 'packs' && validateOutput.path, 'ielts');
+    assert.equal(validateOutput.cmd === 'packs' && validateOutput.candidate, 'answer.md');
+
     const evolveApply = parseArgs(['evolve', './pack', '--session', 's', '--apply']);
     assert.equal(evolveApply.cmd, 'evolve');
     assert.equal(evolveApply.cmd === 'evolve' && evolveApply.apply, true);

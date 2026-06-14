@@ -68,8 +68,11 @@ export async function runRepl(ports: ReplPorts): Promise<void> {
     const slash = parseSlash(trimmed);
     if (slash) {
       const handler = commands[slash.name];
-      if (handler) ports.write(`${handler(slash.args)}\n`);
-      else ports.write(`unknown command: /${slash.name}\n`);
+      if (handler) {
+        await runOneTurn(ports, handler(slash.args));
+      } else {
+        ports.write(`unknown command: /${slash.name}\n`);
+      }
       continue;
     }
 

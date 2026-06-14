@@ -19,6 +19,17 @@ Forge produces a complete, valid pack: `pack.json`, `persona.md`, an `agents/` t
 `rubrics/` (each a `.prompt.md` + a `.validator.mjs`), `onboarding.md`, and
 `memory/seeds.md`. Edit the prompts and validators to taste, then re-validate.
 
+For template-isolated generation, use Native Forge:
+
+```sh
+vegito forge --native --domain "US undergraduate admissions counselor" --name admissions-counselor
+vegito packs validate generated/admissions-counselor
+vegito repl --pack generated/admissions-counselor
+```
+
+Native Forge compiles model-produced blueprints into the same pack shape. Generated slash
+commands are domain-namespaced and run through Vegito as model turns, not as printed text.
+
 ### Archetypes
 
 `--archetype` chooses the team shape:
@@ -145,12 +156,17 @@ prompts as positive instructions; reserve prohibitions for the few that truly ma
 
 ```sh
 vegito packs validate <dir>
+vegito packs validate-output <dir> <candidate-file>
 ```
 
 `validate` runs, in order: JSON parse + `schema:1`, path safety, manifest semantics
 (unique agent names, tier references resolve, every rubric has both halves), file existence
 for every declared file, and the constraint budget on prompts. It returns **all** problems
 at once, so fix the list and re-run. A clean pack reports valid.
+
+`validate-output` runs every declared hard rubric validator against a saved candidate
+answer or artifact summary. Use it after a domain workflow produces output that must meet
+the pack's required signals, score gates, artifact requirements, or verification criteria.
 
 ## Evolving a pack from use
 

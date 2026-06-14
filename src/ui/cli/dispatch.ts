@@ -62,6 +62,7 @@ import { createEngine } from '../../permissions/engine.ts';
 import type { PermKey } from '../../tools/spec.ts';
 import type { NeutralMsg, ProviderEvent } from '../../providers/types.ts';
 import { buildCallModel, catalogFilesFor, effectiveConfig, usage, writeCatalogWarnings, type ModelSeam } from './dispatch-support.ts';
+import { validatePackOutput } from './output-validation.ts';
 
 export { buildCallModel } from './dispatch-support.ts';
 
@@ -356,6 +357,13 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
     ports.write(`trusted pack: ${c.path}\n`);
     return 0;
   }
+  if (c.sub === 'validate-output') {
+    if (c.path === undefined || c.candidate === undefined) {
+      ports.writeErr('packs validate-output needs <pack> <candidate-file>\n');
+      return 2;
+    }
+    return validatePackOutput(c.path, c.candidate, cwd, ports);
+  }
   // validate
   if (c.path === undefined) {
     ports.writeErr('packs validate needs a pack directory\n');
@@ -381,7 +389,7 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
 // forge: resolve a plan (from docs, flags, or an interactive interview) → spec →
 // optional model enrichment (online only) → write files → validate. Offline is
 // deterministic and provider-free; the acceptance path. Output goes to --out or
-// ./<pack-name> under cwd.
+// generated/<pack-name> under cwd.
 async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: DispatchPorts): Promise<number> {
   if (c.native) return cmdForgeNative(c, ports);
 
@@ -408,7 +416,7 @@ async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: Disp
     }
   }
 
-  const outDir = c.out ?? join(ports.cwd, spec.name);
+  const outDir = forgeOutDir(c.out, ports.cwd, spec.name);
   try {
     await generatePack(outDir, spec);
   } catch (err) {
@@ -425,7 +433,9 @@ async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: Disp
 
   ports.write(`forged pack "${spec.name}" (${plan.archetype}) at ${outDir}\n`);
   ports.write(`  ${spec.agents.length} agents, ${spec.rubrics.length} rubric(s) — validated clean\n`);
-  ports.write(`  enable with: vegito packs validate ${outDir}\n`);
+  ports.write(`  use with: vegito repl --pack ${outDir}\n`);
+  ports.write(`  one-shot: vegito run --pack ${outDir} -p "your task"\n`);
+  ports.write(`  validate with: vegito packs validate ${outDir}\n`);
   return 0;
 }
 
@@ -472,7 +482,7 @@ async function cmdForgeNative(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports
     return 1;
   }
 
-  const outDir = c.out ?? join(ports.cwd, spec.name);
+  const outDir = forgeOutDir(c.out, ports.cwd, spec.name);
   try {
     await generatePack(outDir, spec);
   } catch (err) {
@@ -489,8 +499,14 @@ async function cmdForgeNative(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports
 
   ports.write(`forged pack "${spec.name}" (native) at ${outDir}\n`);
   ports.write(`  ${spec.agents.length} agents, ${spec.rubrics.length} rubric(s) — validated clean\n`);
-  ports.write(`  enable with: vegito packs validate ${outDir}\n`);
+  ports.write(`  use with: vegito repl --pack ${outDir}\n`);
+  ports.write(`  one-shot: vegito run --pack ${outDir} -p "your task"\n`);
+  ports.write(`  validate with: vegito packs validate ${outDir}\n`);
   return 0;
+}
+
+function forgeOutDir(out: string | undefined, cwd: string, packName: string): string {
+  return out ?? join(cwd, 'generated', packName);
 }
 
 // Returns a plan, an {error}, or undefined when it already wrote a usage message.
