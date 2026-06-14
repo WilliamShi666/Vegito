@@ -12,6 +12,7 @@ import type {
   NeutralMsg,
   NeutralRequest,
   ProviderEvent,
+  ReasoningEffort,
   StopReason,
   Usage,
   WireProtocol,
@@ -59,6 +60,10 @@ function msgToOpenAi(msg: NeutralMsg): OpenAiMessage[] {
   return [out];
 }
 
+function toOpenAiReasoningEffort(effort: Exclude<ReasoningEffort, 'off'>): string {
+  return effort === 'max' ? 'high' : effort;
+}
+
 export function buildOpenAiBody(req: NeutralRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model,
@@ -66,7 +71,9 @@ export function buildOpenAiBody(req: NeutralRequest): Record<string, unknown> {
     stream: true,
     stream_options: { include_usage: true },
   };
-  if (req.reasoning !== undefined && req.reasoning !== 'off') body['reasoning_effort'] = req.reasoning;
+  if (req.reasoning !== undefined && req.reasoning !== 'off') {
+    body['reasoning_effort'] = toOpenAiReasoningEffort(req.reasoning);
+  }
   if (req.tools.length > 0) {
     body['tools'] = req.tools.map((t) => ({
       type: 'function',

@@ -27,6 +27,18 @@ export interface SpecRubric {
   readonly validator: string;
 }
 
+export interface SpecCommand {
+  readonly name: string;
+  readonly description: string;
+  readonly template: string;
+}
+
+export interface SpecEvalCase {
+  readonly name: string;
+  readonly prompt: string;
+  readonly requiredSignals: readonly string[];
+}
+
 export interface SpecMemory {
   /** Seed memory records, one fact per line (becomes ./memory/seeds.md). */
   readonly seeds?: readonly string[];
@@ -42,6 +54,8 @@ export interface ForgeSpec {
   readonly persona: string;
   readonly agents: readonly SpecAgent[];
   readonly rubrics: readonly SpecRubric[];
+  readonly commands?: readonly SpecCommand[];
+  readonly evals?: readonly SpecEvalCase[];
   readonly memory?: SpecMemory;
   /** Onboarding flow prose (becomes ./onboarding.md). */
   readonly onboarding?: string;

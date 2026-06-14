@@ -15,6 +15,7 @@ export interface ProposeOpts {
   // Negative constraints already present in the persona, so the budget is
   // enforced against the post-merge total rather than just the new lines.
   readonly personaNegatives?: number;
+  readonly knownRubrics?: readonly string[];
 }
 
 const NEGATIVE_MARKER = /^\s*(?:[-*]\s*)?(?:don'?t\b|do not\b|never\b|avoid\b|no\s)/i;
@@ -70,10 +71,13 @@ export function propose(observations: readonly Observation[], opts: ProposeOpts 
   }
 
   // --- rubric_drift → per-rubric prompt edits ---
+  const knownRubrics =
+    opts.knownRubrics === undefined ? undefined : new Set(opts.knownRubrics.map((name) => slug(name)));
   const byRubric = new Map<string, { lines: string[]; prov: string[] }>();
   const rubricOrder: string[] = [];
   for (const o of drift) {
     if (o.kind !== 'rubric_drift') continue;
+    if (knownRubrics !== undefined && !knownRubrics.has(slug(o.rubric))) continue;
     const target = `rubrics/${slug(o.rubric)}.prompt.md`;
     let group = byRubric.get(target);
     if (group === undefined) {

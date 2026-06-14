@@ -24,6 +24,14 @@ describe('parseArgs', () => {
     assert.equal(p.script, 's.json');
   });
 
+  test('bare flags without a subcommand select the repl', () => {
+    const p = parseArgs(['--model', 'deepseek-v4-pro', '--pack', 'packs/ielts']);
+    assert.equal(p.cmd, 'repl');
+    if (p.cmd !== 'repl') return;
+    assert.equal(p.model, 'deepseek-v4-pro');
+    assert.deepEqual(p.packs, ['packs/ielts']);
+  });
+
   test('--version / -v / version select the version command', () => {
     for (const a of [['--version'], ['-v'], ['version']]) assert.equal(parseArgs(a).cmd, 'version');
   });
@@ -51,6 +59,48 @@ describe('parseArgs', () => {
     assert.equal(p.mode, 'plan');
     assert.equal(p.cwd, '/w');
     assert.equal(p.script, 'fix.json');
+  });
+
+  test('run and repl accept --pack; packs accepts trust; evolve accepts --apply and eval', () => {
+    const run = parseArgs(['run', '-p', 'x', '--pack', './packs/ielts']);
+    assert.equal(run.cmd, 'run');
+    assert.equal(run.cmd === 'run' && run.packs[0], './packs/ielts');
+
+    const repl = parseArgs(['repl', '--pack', 'ielts', '--pack', './local']);
+    assert.equal(repl.cmd, 'repl');
+    assert.deepEqual(repl.cmd === 'repl' && repl.packs, ['ielts', './local']);
+
+    const trust = parseArgs(['packs', 'trust', 'ielts']);
+    assert.equal(trust.cmd === 'packs' && trust.sub, 'trust');
+    assert.equal(trust.cmd === 'packs' && trust.path, 'ielts');
+
+    const evolveApply = parseArgs(['evolve', './pack', '--session', 's', '--apply']);
+    assert.equal(evolveApply.cmd, 'evolve');
+    assert.equal(evolveApply.cmd === 'evolve' && evolveApply.apply, true);
+
+    const evolveEval = parseArgs(['evolve', 'eval', './pack']);
+    assert.equal(evolveEval.cmd === 'evolve' && evolveEval.sub, 'eval');
+    assert.equal(evolveEval.cmd === 'evolve' && evolveEval.pack, './pack');
+  });
+
+  test('evolve eval accepts candidate, eval-cases, and report files', () => {
+    const parsed = parseArgs([
+      'evolve',
+      'eval',
+      './pack',
+      '--candidate',
+      'candidate.json',
+      '--eval-cases',
+      'cases.json',
+      '--report',
+      'report.json',
+    ]);
+    assert.equal(parsed.cmd, 'evolve');
+    if (parsed.cmd !== 'evolve') return;
+    assert.equal(parsed.sub, 'eval');
+    assert.equal(parsed.candidate, 'candidate.json');
+    assert.equal(parsed.evalCases, 'cases.json');
+    assert.equal(parsed.report, 'report.json');
   });
 
   test('an invalid --mode is a parse error', () => {
@@ -85,6 +135,15 @@ describe('parseArgs', () => {
   test('forge and evolve are recognized commands', () => {
     assert.equal(parseArgs(['forge']).cmd, 'forge');
     assert.equal(parseArgs(['evolve']).cmd, 'evolve');
+  });
+
+  test('forge accepts --native for model-driven template-isolated generation', () => {
+    const parsed = parseArgs(['forge', '--native', '--domain', 'TOEFL speaking', '--script', 'native.json']);
+    assert.equal(parsed.cmd, 'forge');
+    if (parsed.cmd !== 'forge') return;
+    assert.equal(parsed.native, true);
+    assert.equal(parsed.domain, 'TOEFL speaking');
+    assert.equal(parsed.script, 'native.json');
   });
 
   test('an unknown command is an error', () => {

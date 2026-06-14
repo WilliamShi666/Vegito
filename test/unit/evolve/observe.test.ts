@@ -67,3 +67,16 @@ test('observe drops malformed raw observations (unknown kind) defensively', asyn
   assert.equal(obs.length, 1);
   assert.equal(obs[0]!.kind, 'friction');
 });
+
+test('observe drops malformed known-kind shapes returned by custom reviewers', async () => {
+  const secretLike = ['sk', 'this-is-a-secret-shaped-token'].join('-');
+  const reviewer: Reviewer = async () =>
+    [
+      { kind: 'memory_candidate', summary: 'bad level', fact: 'f', level: 'l9' },
+      { kind: 'memory_candidate', summary: 'secret', fact: secretLike, level: 'l1' },
+      { kind: 'missing_skill', summary: 'ok', skill: 'apply-patch' },
+    ] as unknown as readonly RawObservation[];
+  const obs = await observe('s', [userMsg('x')], reviewer);
+  assert.equal(obs.length, 1);
+  assert.equal(obs[0]!.kind, 'missing_skill');
+});

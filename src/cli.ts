@@ -24,7 +24,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   const onSigint = (): void => controller.abort(new Error('interrupted'));
   process.once('SIGINT', onSigint);
 
-  const wantsRepl = argv[0] === undefined || argv[0] === 'repl';
+  const head = argv[0];
+  const wantsRepl =
+    head === undefined ||
+    head === 'repl' ||
+    (head.startsWith('-') && head !== '--version' && head !== '-v' && head !== '--help' && head !== '-h');
 
   const ports: DispatchPorts = {
     write: (s) => process.stdout.write(s),

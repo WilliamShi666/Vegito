@@ -8,14 +8,6 @@ import type { ModelProfile } from './profile.ts';
 
 export const BUILTIN_CATALOG: readonly ModelProfile[] = Object.freeze([
   {
-    id: 'claude-fable-5',
-    wire: 'anthropic',
-    contextWindow: 200_000,
-    maxOutput: 64_000,
-    reasoning: true,
-    aliases: ['fable'],
-  },
-  {
     id: 'claude-opus-4-8',
     wire: 'anthropic',
     contextWindow: 200_000,
@@ -64,6 +56,7 @@ const PROFILE_SCHEMA: JsonSchema = {
     contextWindow: { type: 'integer' },
     maxOutput: { type: 'integer' },
     reasoning: { type: 'boolean' },
+    baseUrl: { type: 'string' },
     aliases: { type: 'array', items: { type: 'string' } },
   },
 };
@@ -94,22 +87,49 @@ export function mergeCatalog(base: readonly ModelProfile[], overrides: readonly 
   return { catalog, warnings };
 }
 
-export async function loadCatalog(opts: { file?: string }): Promise<CatalogResult> {
-  if (opts.file === undefined) return { catalog: BUILTIN_CATALOG, warnings: [] };
+function entriesFromParsed(parsed: unknown, file: string): { entries: readonly unknown[]; warning?: string } {
+  if (Array.isArray(parsed)) return { entries: parsed };
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { entries: [], warning: `${file}: expected a JSON array or object with models; using built-in catalog` };
+  }
+  const models = (parsed as Record<string, unknown>)['models'];
+  if (typeof models !== 'object' || models === null || Array.isArray(models)) {
+    return { entries: [], warning: `${file}: expected a models object; using built-in catalog` };
+  }
+  return {
+    entries: Object.entries(models as Record<string, unknown>).map(([id, value]) => {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return { id };
+      return { id, ...(value as Record<string, unknown>) };
+    }),
+  };
+}
+
+async function readCatalogFile(base: readonly ModelProfile[], file: string): Promise<CatalogResult> {
   let text: string;
   try {
-    text = await readFile(opts.file, 'utf8');
+    text = await readFile(file, 'utf8');
   } catch {
-    return { catalog: BUILTIN_CATALOG, warnings: [] }; // no overlay file is the normal case
+    return { catalog: base, warnings: [] }; // no overlay file is the normal case
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { catalog: BUILTIN_CATALOG, warnings: [`${opts.file}: invalid JSON; using built-in catalog`] };
+    return { catalog: base, warnings: [`${file}: invalid JSON; using prior catalog`] };
   }
-  if (!Array.isArray(parsed)) {
-    return { catalog: BUILTIN_CATALOG, warnings: [`${opts.file}: expected a JSON array; using built-in catalog`] };
+  const { entries, warning } = entriesFromParsed(parsed, file);
+  if (warning !== undefined) return { catalog: base, warnings: [warning] };
+  return mergeCatalog(base, entries);
+}
+
+export async function loadCatalog(opts: { file?: string; files?: readonly string[] }): Promise<CatalogResult> {
+  const files = opts.files ?? (opts.file === undefined ? [] : [opts.file]);
+  let catalog: readonly ModelProfile[] = BUILTIN_CATALOG;
+  const warnings: string[] = [];
+  for (const file of files) {
+    const result = await readCatalogFile(catalog, file);
+    catalog = result.catalog;
+    warnings.push(...result.warnings);
   }
-  return mergeCatalog(BUILTIN_CATALOG, parsed);
+  return { catalog, warnings };
 }

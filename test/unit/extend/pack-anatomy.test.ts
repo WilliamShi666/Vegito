@@ -142,3 +142,26 @@ test('validatePack accepts a well-formed pack within budget', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('validatePack rejects a manifest-declared eval fixture that is missing', async () => {
+  const root = await tmp();
+  try {
+    await writeFile(
+      join(root, 'pack.json'),
+      JSON.stringify({
+        schema: 1,
+        name: 'eval-missing',
+        version: '1.0.0',
+        description: 'x',
+        evals: './evals/cases.json',
+      }),
+      'utf8',
+    );
+
+    const result = await validatePack(root);
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((p) => /evals\/cases\.json/i.test(p)), result.problems.join('; '));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

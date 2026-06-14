@@ -7,7 +7,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
-import type { ForgeSpec } from './spec.ts';
+import type { ForgeSpec, SpecEvalCase } from './spec.ts';
 import { slug } from './spec.ts';
 
 /** A generated pack as a map of "./"-relative path → file content. */
@@ -22,6 +22,11 @@ function rubricPromptPath(name: string): string {
 function rubricValidatorPath(name: string): string {
   return `./rubrics/${slug(name)}.validator.mjs`;
 }
+function commandPath(name: string): string {
+  return `./commands/${slug(name)}.md`;
+}
+
+const EVAL_CASES_PATH = './evals/cases.json';
 
 // Build the manifest object first so the file map and pack.json never drift.
 function buildManifest(spec: ForgeSpec): Record<string, unknown> {
@@ -46,6 +51,8 @@ function buildManifest(spec: ForgeSpec): Record<string, unknown> {
     modelTiers: { ...spec.tiers },
   };
   if (spec.onboarding !== undefined) manifest['onboarding'] = './onboarding.md';
+  if (spec.commands !== undefined && spec.commands.length > 0) manifest['commands'] = './commands';
+  if (spec.evals !== undefined && spec.evals.length > 0) manifest['evals'] = EVAL_CASES_PATH;
   if (spec.memory !== undefined) {
     const mem: Record<string, string> = {};
     if (spec.memory.seeds !== undefined) mem['seeds'] = './memory/seeds.md';
@@ -70,6 +77,12 @@ export function specToFiles(spec: ForgeSpec): FileMap {
     files.set(rubricValidatorPath(r.name), ensureTrailingNewline(r.validator));
   }
 
+  for (const c of spec.commands ?? []) files.set(commandPath(c.name), ensureTrailingNewline(commandFile(c)));
+
+  if (spec.evals !== undefined && spec.evals.length > 0) {
+    files.set(EVAL_CASES_PATH, `${JSON.stringify(evalCasesFile(spec.evals), null, 2)}\n`);
+  }
+
   if (spec.onboarding !== undefined) files.set('./onboarding.md', ensureTrailingNewline(spec.onboarding));
   if (spec.memory?.seeds !== undefined) {
     files.set('./memory/seeds.md', ensureTrailingNewline(spec.memory.seeds.join('\n')));
@@ -80,6 +93,21 @@ export function specToFiles(spec: ForgeSpec): FileMap {
 
 function ensureTrailingNewline(s: string): string {
   return s.endsWith('\n') ? s : `${s}\n`;
+}
+
+function commandFile(command: { readonly description: string; readonly template: string }): string {
+  return ['---', `description: ${frontmatterLine(command.description)}`, '---', command.template].join('\n');
+}
+
+function evalCasesFile(cases: readonly SpecEvalCase[]): { readonly schema: 1; readonly cases: readonly SpecEvalCase[] } {
+  return {
+    schema: 1,
+    cases: cases.map((c) => ({ name: c.name, prompt: c.prompt, requiredSignals: [...c.requiredSignals] })),
+  };
+}
+
+function frontmatterLine(text: string): string {
+  return text.replace(/\r?\n/g, ' ').replaceAll('---', '').replace(/\s+/g, ' ').trim();
 }
 
 /** Impure: write a FileMap under `root`, creating parent directories as needed. */

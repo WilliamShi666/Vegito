@@ -26,6 +26,7 @@
     "test:e2e": "node --disable-warning=ExperimentalWarning --test 'test/e2e/**/*.test.ts'",
     "test:adversarial": "node --disable-warning=ExperimentalWarning --test 'test/adversarial/**/*.test.ts'",
     "coverage": "node --disable-warning=ExperimentalWarning --test --experimental-test-coverage 'test/**/*.test.ts'",
+    "install:local": "node scripts/install-local.mjs",
     "lint:constitution": "node scripts/constitution.mjs",
     "check": "npm run typecheck && npm run lint:constitution && npm test"
   },

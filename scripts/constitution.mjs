@@ -72,21 +72,24 @@ for (const f of [...srcFiles, ...testFiles]) {
   }
 }
 
-// A6 — secret pattern scan across shippable text.
+// A6 — secret pattern scan across repository text, including root docs and
+// ignored local text files. Skip dependency/build/VCS directories, but do not
+// assume secrets only appear under src/test/catalog.
 const SECRET_PATTERNS = [
   [/sk-ant-[a-zA-Z0-9-]{8,}/, 'anthropic api key'],
   [/sk-proj-[a-zA-Z0-9_-]{8,}/, 'openai project key'],
+  [/\bsk-[a-zA-Z0-9][a-zA-Z0-9_-]{15,}\b/, 'generic api key'],
   [/AKIA[0-9A-Z]{16}/, 'aws access key id'],
   [/ghp_[a-zA-Z0-9]{20,}/, 'github pat'],
   [/xox[baprs]-[a-zA-Z0-9-]{10,}/, 'slack token'],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key block'],
 ];
-const scanDirs = ['src', 'test', 'scripts', 'bin', 'catalog', 'packs'];
-for (const d of scanDirs) {
-  for (const f of walk(join(ROOT, d), ['.ts', '.js', '.mjs', '.json', '.md', '.sh'])) {
-    const text = readFileSync(f, 'utf8');
-    for (const [re, label] of SECRET_PATTERNS) {
-      if (re.test(text)) violations.push(`A6: ${rel(f)} matches secret pattern (${label})`);
+for (const f of walk(ROOT, ['.ts', '.js', '.mjs', '.json', '.md', '.sh', '.txt', '.env', '.yml', '.yaml'])) {
+  const text = readFileSync(f, 'utf8');
+  for (const [re, label] of SECRET_PATTERNS) {
+    if (re.test(text)) {
+      violations.push(`A6: ${rel(f)} matches secret pattern (${label})`);
+      break;
     }
   }
 }

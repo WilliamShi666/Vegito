@@ -43,12 +43,16 @@ design and the "transcendence ledger" of what is new.
 
 ## Quickstart
 
+Default live runs use DeepSeek's official `deepseek-v4-pro` Anthropic-compatible
+profile with `reasoningEffort: "max"`. Set `ANTHROPIC_AUTH_TOKEN` or
+`ANTHROPIC_API_KEY` in your shell; never commit provider credentials.
+
 ```sh
+# Start an interactive session.
+vegito
+
 # Run a one-shot task headlessly (prints the answer, exits with a status code).
 vegito run -p "explain what this repo does"
-
-# Start an interactive session.
-vegito repl
 
 # Forge a domain pack — here, an IELTS tutor team — fully offline and deterministic.
 vegito forge --offline --archetype tutor-team --domain "IELTS writing and speaking" \
@@ -57,15 +61,20 @@ vegito forge --offline --archetype tutor-team --domain "IELTS writing and speaki
 # Check that a pack is well-formed.
 vegito packs validate packs/ielts
 
-# Review a finished session and let Vegito propose improvements to a pack.
-vegito evolve packs/ielts --session <session-id> --mode acceptEdits
+# Review a finished session and let Vegito propose improvements to a pack
+# without mutating anything.
+vegito evolve packs/ielts --session <session-id>
+
+# Apply accepted proposals through the permission gate.
+vegito evolve packs/ielts --session <session-id> --mode acceptEdits --apply
 
 # Undo the last batch of applied improvements.
 vegito evolve revert packs/ielts
 ```
 
-Full command reference and configuration are in [USER_GUIDE.md](./USER_GUIDE.md). To build
-or hand-write a pack, see [PACK_AUTHORING.md](./PACK_AUTHORING.md).
+For a first local setup, see [GETTING_STARTED.md](./GETTING_STARTED.md). Full command
+reference and configuration are in [USER_GUIDE.md](./USER_GUIDE.md). To build or
+hand-write a pack, see [PACK_AUTHORING.md](./PACK_AUTHORING.md).
 
 ## Permission modes
 

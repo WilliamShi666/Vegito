@@ -62,7 +62,7 @@ test('P8 gate: a full fixture pack loads, registers, and runs through the gate',
     await buildFixturePack(root);
     const pack = await loadPack(root);
     const reg = createExtensionRegistry();
-    await reg.installPack(pack);
+    await reg.installPack(pack, { trusted: true });
 
     // A pack-scoped tool registered under the namespaced surface.
     const gradeTool = defineTool({

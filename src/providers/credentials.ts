@@ -73,9 +73,10 @@ export class CredentialPool {
 
 export type AuthKind = 'anthropic' | 'openai';
 
-export function credentialFromEnv(id: string, envVar: string, kind: AuthKind): Credential | null {
-  const value = process.env[envVar];
-  if (value === undefined || value === '') return null;
+export function credentialFromEnv(id: string, envVar: string | readonly string[], kind: AuthKind): Credential | null {
+  const envVars = typeof envVar === 'string' ? [envVar] : envVar;
+  const value = envVars.map((name) => process.env[name]).find((v) => v !== undefined && v !== '');
+  if (value === undefined) return null;
   const headers = kind === 'anthropic' ? { 'x-api-key': value } : { authorization: `Bearer ${value}` };
   return { id, headers };
 }
@@ -93,4 +94,13 @@ export function baseUrlFromEnv(kind: AuthKind): string | undefined {
   const value = process.env[BASE_URL_VARS[kind]];
   if (value === undefined || value === '') return undefined;
   return value.replace(/\/+$/, '');
+}
+
+export function scrubbedSubprocessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/API[_-]?KEY|AUTH[_-]?TOKEN|TOKEN|SECRET|PASSWORD/i.test(key)) continue;
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
 }

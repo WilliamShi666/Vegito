@@ -1,0 +1,6 @@
+user_profile
+past_scores_array
+weakness_list
+drill_history
+feedback_summary_log
+progress_timeline

@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "name": "customer-churn-analysis-harness",
+  "version": "1.0.0",
+  "description": "A domain harness for customer churn analysis teams to perform rigorous schema inspection, data quality checks, exploratory data analysis, and artifact generation, with strict causal claim gatekeeping and reproducibility verification.",
+  "persona": "./persona.md",
+  "grants": [],
+  "agents": [
+    {
+      "name": "schema-inspector",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/schema-inspector.md"
+    },
+    {
+      "name": "data-quality-gatekeeper",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/data-quality-gatekeeper.md"
+    },
+    {
+      "name": "eda-analyst",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/eda-analyst.md"
+    },
+    {
+      "name": "causal-guard",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/causal-guard.md"
+    },
+    {
+      "name": "artifact-compiler",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/artifact-compiler.md"
+    },
+    {
+      "name": "reproducibility-verifier",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/reproducibility-verifier.md"
+    }
+  ],
+  "rubrics": [
+    {
+      "name": "data-quality-score",
+      "prompt": "./rubrics/data-quality-score.prompt.md",
+      "validator": "./rubrics/data-quality-score.validator.mjs"
+    },
+    {
+      "name": "reproducibility-score",
+      "prompt": "./rubrics/reproducibility-score.prompt.md",
+      "validator": "./rubrics/reproducibility-score.validator.mjs"
+    }
+  ],
+  "modelTiers": {
+    "smart": "the strongest available reasoning tier for judgement-heavy work",
+    "fast": "a quick tier for routing, bookkeeping, and mechanical checks"
+  },
+  "onboarding": "./onboarding.md",
+  "commands": "./commands",
+  "evals": "./evals/cases.json",
+  "memory": {
+    "seeds": "./memory/seeds.md",
+    "promotion": "Promote successful workflow runs (all gates passed) with complete logs and artifacts to persistent memory for future audits and pattern reuse."
+  }
+}

@@ -10,7 +10,14 @@ import type { PermissionMode } from '../../config/schema.ts';
 const MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypass'];
 
 export type ParsedCommand =
-  | { readonly cmd: 'repl'; readonly model?: string; readonly mode?: PermissionMode; readonly cwd?: string; readonly script?: string }
+  | {
+      readonly cmd: 'repl';
+      readonly model?: string;
+      readonly mode?: PermissionMode;
+      readonly cwd?: string;
+      readonly script?: string;
+      readonly packs: readonly string[];
+    }
   | {
       readonly cmd: 'run';
       readonly prompt: string;
@@ -19,9 +26,17 @@ export type ParsedCommand =
       readonly mode?: PermissionMode;
       readonly cwd?: string;
       readonly script?: string;
+      readonly packs: readonly string[];
     }
-  | { readonly cmd: 'sessions'; readonly sub: 'list' | 'resume' | 'fork'; readonly target?: string; readonly at?: string }
-  | { readonly cmd: 'packs'; readonly sub: 'list' | 'validate'; readonly path?: string }
+  | {
+      readonly cmd: 'sessions';
+      readonly sub: 'list' | 'resume' | 'fork';
+      readonly target?: string;
+      readonly at?: string;
+      readonly cwd?: string;
+      readonly script?: string;
+    }
+  | { readonly cmd: 'packs'; readonly sub: 'list' | 'validate' | 'trust'; readonly path?: string; readonly cwd?: string }
   | {
       readonly cmd: 'forge';
       readonly offline: boolean;
@@ -31,14 +46,19 @@ export type ParsedCommand =
       readonly from?: string;
       readonly out?: string;
       readonly script?: string;
+      readonly native: boolean;
     }
   | {
       readonly cmd: 'evolve';
-      readonly sub: 'run' | 'revert';
+      readonly sub: 'run' | 'revert' | 'eval';
       readonly pack: string;
       readonly session?: string;
       readonly mode?: PermissionMode;
       readonly script?: string;
+      readonly candidate?: string;
+      readonly evalCases?: string;
+      readonly report?: string;
+      readonly apply: boolean;
     }
   | { readonly cmd: 'version' }
   | { readonly cmd: 'help' }
@@ -46,15 +66,34 @@ export type ParsedCommand =
 
 interface Flags {
   readonly values: Readonly<Record<string, string>>;
+  readonly lists: Readonly<Record<string, readonly string[]>>;
   readonly bools: ReadonlySet<string>;
   readonly positionals: readonly string[];
 }
 
-const VALUE_FLAGS = new Set(['model', 'mode', 'cwd', 'script', 'p', 'prompt', 'archetype', 'domain', 'name', 'from', 'out', 'session']);
-const BOOL_FLAGS = new Set(['json', 'offline']);
+const VALUE_FLAGS = new Set([
+  'model',
+  'mode',
+  'cwd',
+  'script',
+  'p',
+  'prompt',
+  'archetype',
+  'domain',
+  'name',
+  'from',
+  'out',
+  'session',
+  'pack',
+  'candidate',
+  'eval-cases',
+  'report',
+]);
+const BOOL_FLAGS = new Set(['json', 'offline', 'apply', 'native']);
 
 function parseFlags(args: readonly string[]): Flags | { error: string } {
   const values: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
   const bools = new Set<string>();
   const positionals: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -67,6 +106,7 @@ function parseFlags(args: readonly string[]): Flags | { error: string } {
         const next = args[i + 1];
         if (next === undefined) return { error: `flag --${name} needs a value` };
         values[name] = next;
+        lists[name] = [...(lists[name] ?? []), next];
         i += 1;
       } else {
         return { error: `unknown flag: ${a}` };
@@ -75,7 +115,7 @@ function parseFlags(args: readonly string[]): Flags | { error: string } {
       positionals.push(a);
     }
   }
-  return { values, bools, positionals };
+  return { values, lists, bools, positionals };
 }
 
 function asMode(raw: string | undefined): PermissionMode | undefined | { error: string } {
@@ -90,21 +130,29 @@ function opt<K extends string>(key: K, value: string | undefined): Record<K, str
 
 export function parseArgs(argv: readonly string[]): ParsedCommand {
   const head = argv[0];
-  if (head === undefined || head === 'repl') {
-    const f = parseFlags(argv.slice(head === undefined ? 0 : 1));
+  if (head === '--version' || head === '-v' || head === 'version') return { cmd: 'version' };
+  if (head === '--help' || head === '-h' || head === 'help') return { cmd: 'help' };
+  if (head === undefined || head === 'repl' || head.startsWith('-')) {
+    const f = parseFlags(argv.slice(head === 'repl' ? 1 : 0));
     if ('error' in f) return { cmd: 'error', message: f.error };
     const mode = asMode(f.values.mode);
     if (mode && typeof mode === 'object') return { cmd: 'error', message: mode.error };
-    return { cmd: 'repl', ...opt('model', f.values.model), ...(mode ? { mode } : {}), ...opt('cwd', f.values.cwd), ...opt('script', f.values.script) };
+    return {
+      cmd: 'repl',
+      ...opt('model', f.values.model),
+      ...(mode ? { mode } : {}),
+      ...opt('cwd', f.values.cwd),
+      ...opt('script', f.values.script),
+      packs: f.lists.pack ?? [],
+    };
   }
-  if (head === '--version' || head === '-v' || head === 'version') return { cmd: 'version' };
-  if (head === '--help' || head === '-h' || head === 'help') return { cmd: 'help' };
   if (head === 'forge') {
     const f = parseFlags(argv.slice(1));
     if ('error' in f) return { cmd: 'error', message: f.error };
     return {
       cmd: 'forge',
       offline: f.bools.has('offline'),
+      native: f.bools.has('native'),
       ...opt('archetype', f.values.archetype),
       ...opt('domain', f.values.domain),
       ...opt('name', f.values.name),
@@ -116,9 +164,9 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
   if (head === 'evolve') {
     const f = parseFlags(argv.slice(1));
     if ('error' in f) return { cmd: 'error', message: f.error };
-    const sub = f.positionals[0] === 'revert' ? 'revert' : 'run';
+    const sub = f.positionals[0] === 'revert' ? 'revert' : f.positionals[0] === 'eval' ? 'eval' : 'run';
     // Pack defaults to cwd: `evolve` operates on the pack you're standing in.
-    const pack = (sub === 'revert' ? f.positionals[1] : f.positionals[0]) ?? '.';
+    const pack = (sub === 'revert' || sub === 'eval' ? f.positionals[1] : f.positionals[0]) ?? '.';
     const mode = asMode(f.values.mode);
     if (mode && typeof mode === 'object') return { cmd: 'error', message: mode.error };
     return {
@@ -128,6 +176,10 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
       ...opt('session', f.values.session),
       ...(mode ? { mode } : {}),
       ...opt('script', f.values.script),
+      ...opt('candidate', f.values.candidate),
+      ...opt('evalCases', f.values['eval-cases']),
+      ...opt('report', f.values.report),
+      apply: f.bools.has('apply'),
     };
   }
 
@@ -146,22 +198,31 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
       ...(mode ? { mode } : {}),
       ...opt('cwd', f.values.cwd),
       ...opt('script', f.values.script),
+      packs: f.lists.pack ?? [],
     };
   }
 
   if (head === 'sessions') {
-    const sub = argv[1] ?? 'list';
+    const f = parseFlags(argv.slice(1));
+    if ('error' in f) return { cmd: 'error', message: f.error };
+    const sub = f.positionals[0] ?? 'list';
     if (sub !== 'list' && sub !== 'resume' && sub !== 'fork') return { cmd: 'error', message: `unknown sessions subcommand: ${sub}` };
-    if (sub === 'resume' && argv[2] === undefined) return { cmd: 'error', message: 'sessions resume needs a session id' };
-    if (sub === 'fork' && (argv[2] === undefined || argv[3] === undefined)) return { cmd: 'error', message: 'sessions fork needs <sid> <recordId>' };
-    return { cmd: 'sessions', sub, ...opt('target', argv[2]), ...opt('at', argv[3]) };
+    const target = f.positionals[1];
+    const at = f.positionals[2];
+    if (sub === 'resume' && target === undefined) return { cmd: 'error', message: 'sessions resume needs a session id' };
+    if (sub === 'fork' && (target === undefined || at === undefined)) return { cmd: 'error', message: 'sessions fork needs <sid> <recordId>' };
+    return { cmd: 'sessions', sub, ...opt('target', target), ...opt('at', at), ...opt('cwd', f.values.cwd), ...opt('script', f.values.script) };
   }
 
   if (head === 'packs') {
-    const sub = argv[1] ?? 'list';
-    if (sub !== 'list' && sub !== 'validate') return { cmd: 'error', message: `unknown packs subcommand: ${sub}` };
-    if (sub === 'validate' && argv[2] === undefined) return { cmd: 'error', message: 'packs validate needs a pack directory' };
-    return { cmd: 'packs', sub, ...opt('path', argv[2]) };
+    const f = parseFlags(argv.slice(1));
+    if ('error' in f) return { cmd: 'error', message: f.error };
+    const sub = f.positionals[0] ?? 'list';
+    if (sub !== 'list' && sub !== 'validate' && sub !== 'trust') return { cmd: 'error', message: `unknown packs subcommand: ${sub}` };
+    const path = f.positionals[1];
+    if (sub === 'validate' && path === undefined) return { cmd: 'error', message: 'packs validate needs a pack directory' };
+    if (sub === 'trust' && path === undefined) return { cmd: 'error', message: 'packs trust needs a pack name or directory' };
+    return { cmd: 'packs', sub, ...opt('path', path), ...opt('cwd', f.values.cwd) };
   }
 
   return { cmd: 'error', message: `unknown command: ${head}` };

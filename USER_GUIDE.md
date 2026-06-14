@@ -6,7 +6,11 @@ permission model you operate under, and how to configure the system.
 ## Requirements
 
 - **Node ≥ 22.18** (24 LTS recommended). There is nothing else to install — Vegito has no
-  runtime dependencies, and there is no build step.
+  runtime dependencies, and `bin/vegito.js` can run the TypeScript source directly when
+  `dist/` has not been built.
+
+For a step-by-step local setup and first pack/evolution walkthrough, see
+[GETTING_STARTED.md](./GETTING_STARTED.md).
 
 ## Commands
 
@@ -55,11 +59,14 @@ session so you can explore an alternative path without disturbing the original.
 ```sh
 vegito packs list
 vegito packs validate <dir>
+vegito packs trust <pack>
 ```
 
 `validate` runs the full manifest + filesystem check on a pack directory and reports every
 problem (or confirms it is valid). Run it after editing a pack by hand. See
-[PACK_AUTHORING.md](./PACK_AUTHORING.md).
+[PACK_AUTHORING.md](./PACK_AUTHORING.md). `trust` records explicit trust for a pack that
+needs executable hooks; untrusted packs can still contribute persona, skills, commands,
+and non-executable hooks.
 
 ### `forge` — generate a domain pack (the meta-harness)
 
@@ -91,18 +98,22 @@ vegito forge --offline --archetype tutor-team \
 ### `evolve` — improve a pack from real use
 
 ```sh
-vegito evolve <pack-dir> --session <session-id> [--mode <mode>] [--script <file>]
+vegito evolve <pack-dir> --session <session-id> [--mode <mode>] [--script <file>] [--apply]
+vegito evolve eval <pack-dir>
 vegito evolve revert <pack-dir>
 ```
 
 `evolve <pack> --session <sid>` reviews a finished session, derives observations (friction,
-rubric drift, a missing skill, a memory worth promoting), turns them into concrete
-proposals, and applies the ones the permission gate allows — bumping the pack version and
-writing a provenance record. `evolve revert <pack>` undoes the last applied batch,
-restoring the pack to its prior bytes exactly.
+rubric drift, a missing skill, a memory worth promoting), and turns them into concrete
+proposals. By default this is review-only and does not modify the pack. Pass `--apply`
+to apply the proposals the permission gate allows — bumping the pack version and writing
+provenance and EvolutionRun records. `evolve eval <pack>` runs the non-mutating evaluation
+entry point. `evolve revert <pack>` undoes the last applied batch, restoring the pack to
+its prior bytes exactly.
 
 ```sh
-vegito evolve packs/ielts --session 0c1f… --mode acceptEdits
+vegito evolve packs/ielts --session 0c1f…
+vegito evolve packs/ielts --session 0c1f… --mode acceptEdits --apply
 vegito evolve revert packs/ielts
 ```
 
@@ -139,16 +150,25 @@ silently carried.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `model` | string | `claude-fable-5` | Model id from the catalog. |
+| `model` | string | `deepseek-v4-pro` | Model id from the catalog. |
+| `reasoningEffort` | `off` \| `low` \| `medium` \| `high` \| `max` | `max` | Thinking/reasoning effort sent with each model request. |
 | `maxIterations` | integer | `50` | Maximum model calls per turn. |
 | `permissionMode` | `default` \| `acceptEdits` \| `plan` \| `bypass` | `default` | Gate posture. |
 | `trace` | boolean | `false` | Write a per-session trace log. |
+| `catalogFiles` | string[] | `["catalog/models.json", "~/.vegito/models.json", "./.vegito/models.json"]` | Model catalog overlays. |
+| `packRoots` | string[] | `["./packs", "~/.vegito/packs"]` | Pack discovery roots. |
+| `trustedPacks` | string[] | `[]` | Packs trusted to run executable hooks. |
+| `providerChains` | object | `{}` | Optional failover chains by tier/name. |
+| `permissionRules` | object[] | `[]` | Additional permission rules. |
+| `compaction` | object | `{ "maxTokens": 160000, "protectedTail": 8 }` | Context compaction limits. |
+| `evolve.defaultApply` | boolean | `false` | Whether evolve applies by default. Keep false unless you want automatic pack mutation. |
 
 Example `./.vegito/config.json`:
 
 ```json
 {
-  "model": "claude-fable-5",
+  "model": "deepseek-v4-pro",
+  "reasoningEffort": "max",
   "permissionMode": "acceptEdits",
   "maxIterations": 30
 }

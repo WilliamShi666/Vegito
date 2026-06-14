@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,6 +25,7 @@ const GOOD = JSON.stringify({
   skills: './skills',
   commands: './commands',
   hooks: './hooks',
+  evals: './evals/cases.json',
   grants: ['read', 'skill'],
 });
 
@@ -33,6 +34,7 @@ test('parseManifest accepts a well-formed schema:1 manifest', () => {
   assert.equal(m.name, 'ielts-tutor');
   assert.equal(m.version, '1.2.0');
   assert.deepEqual(m.grants, ['read', 'skill']);
+  assert.equal(m.evals, './evals/cases.json');
 });
 
 test('parseManifest rejects a non-1 schema (no legacy formats — A9)', () => {
@@ -80,6 +82,7 @@ test('loadPack rejects a manifest with a traversing path (adversarial corpus)', 
     { commands: '/absolute/path' },
     { hooks: './ok/../../../escape' },
     { persona: '..' },
+    { evals: './evals/../../escape.json' },
   ];
   for (const overrides of corpus) {
     const root = await tmp();
@@ -90,6 +93,31 @@ test('loadPack rejects a manifest with a traversing path (adversarial corpus)', 
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  }
+});
+
+test('loadPack rejects declared paths that are symlinks escaping the pack root', async () => {
+  const root = await tmp();
+  const outside = await tmp();
+  try {
+    await writeFile(join(outside, 'persona.md'), 'stolen persona', 'utf8');
+    await symlink(join(outside, 'persona.md'), join(root, 'persona.md'));
+    await writeFile(
+      join(root, 'pack.json'),
+      JSON.stringify({
+        schema: 1,
+        name: 'escape',
+        version: '1.0.0',
+        description: 'x',
+        persona: './persona.md',
+      }),
+      'utf8',
+    );
+
+    await assert.rejects(loadPack(root), /escape|outside|unsafe|symlink|path/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 

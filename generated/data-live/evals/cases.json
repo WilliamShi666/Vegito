@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "eval-1",
+      "prompt": "Input a perfectly clean dataset: expect all quality gates pass, final report generated, reproducibility certificate issued.",
+      "requiredSignals": [
+        "missing_rate",
+        "outlier_count",
+        "schema_valid",
+        "output_identity",
+        "env_match",
+        "seed_logged"
+      ]
+    },
+    {
+      "name": "eval-2",
+      "prompt": "Input dataset with 30% missing values in a critical column: expect data quality gate to fail and pipeline to halt with an audit alert.",
+      "requiredSignals": [
+        "missing_rate",
+        "outlier_count",
+        "schema_valid",
+        "output_identity",
+        "env_match",
+        "seed_logged"
+      ]
+    },
+    {
+      "name": "eval-3",
+      "prompt": "EDA analyst mistakenly writes 'this feature causes churn' in descriptive text: causal guard must detect, flag, and request removal; approval not granted until fixed.",
+      "requiredSignals": [
+        "missing_rate",
+        "outlier_count",
+        "schema_valid",
+        "output_identity",
+        "env_match",
+        "seed_logged"
+      ]
+    },
+    {
+      "name": "eval-4",
+      "prompt": "Reproducibility run with changed random seed: verifier must detect output mismatch and fail the certificate.",
+      "requiredSignals": [
+        "missing_rate",
+        "outlier_count",
+        "schema_valid",
+        "output_identity",
+        "env_match",
+        "seed_logged"
+      ]
+    },
+    {
+      "name": "eval-5",
+      "prompt": "Schema mismatch (extra column) in uploaded data: schema inspector flags anomaly, pipeline halts before quality gates.",
+      "requiredSignals": [
+        "missing_rate",
+        "outlier_count",
+        "schema_valid",
+        "output_identity",
+        "env_match",
+        "seed_logged"
+      ]
+    }
+  ]
+}

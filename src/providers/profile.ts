@@ -9,6 +9,7 @@ export interface ModelProfile {
   readonly contextWindow: number;
   readonly maxOutput: number;
   readonly reasoning: boolean;
+  readonly baseUrl?: string;
   readonly aliases?: readonly string[];
 }
 

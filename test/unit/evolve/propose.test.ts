@@ -72,6 +72,24 @@ test('rubric drift produces one edit per rubric, grouped', () => {
   assert.deepEqual([...band.provenance], ['s#0', 's#1']);
 });
 
+test('rubric drift is rejected when a known-rubrics allowlist is provided and the rubric is unknown', () => {
+  const proposals = propose(
+    [
+      obs('s#0', { kind: 'rubric_drift', summary: 'known', rubric: 'band-score', guidance: 'Weight coherence higher.' }),
+      obs('s#1', { kind: 'rubric_drift', summary: 'unknown', rubric: 'invented rubric', guidance: 'Do anything.' }),
+    ],
+    { knownRubrics: ['band-score'] },
+  );
+  const edits = proposals.filter((p) => p.kind === 'pack_edit');
+  assert.equal(edits.length, 1);
+  const e = edits[0]!;
+  assert.equal(e.kind, 'pack_edit');
+  if (e.kind !== 'pack_edit') return;
+  assert.equal(e.target, 'rubrics/band-score.prompt.md');
+  assert.match(e.text, /Weight coherence higher\./);
+  assert.doesNotMatch(e.text, /Do anything\./);
+});
+
 test('missing skills collapse into one onboarding edit', () => {
   const proposals = propose([
     obs('s#0', { kind: 'missing_skill', summary: 'a', skill: 'apply-patch' }),

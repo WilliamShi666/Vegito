@@ -1,7 +1,7 @@
 import type { CallModel } from '../ui/runtime.ts';
 import type { NeutralRequest } from '../providers/types.ts';
 import type { Reviewer } from './observe.ts';
-import { OBSERVATION_KINDS, type RawObservation } from './types.ts';
+import { validateRawObservation, type RawObservation } from './types.ts';
 
 // The reviewer (DESIGN §8): a bounded model call that reads a session
 // transcript and emits raw observations as JSON. observe() handles id/sid
@@ -38,10 +38,8 @@ function parseRaws(text: string): readonly RawObservation[] {
   if (!Array.isArray(parsed)) return [];
   const out: RawObservation[] = [];
   for (const item of parsed) {
-    if (typeof item !== 'object' || item === null) continue;
-    const kind = (item as { kind?: unknown }).kind;
-    if (typeof kind !== 'string' || !(OBSERVATION_KINDS as readonly string[]).includes(kind)) continue;
-    out.push(item as RawObservation);
+    const validated = validateRawObservation(item);
+    if (validated.ok) out.push(validated.value);
   }
   return out;
 }

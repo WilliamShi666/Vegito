@@ -3,3 +3,6 @@ dist/
 coverage/
 *.tsbuildinfo
 .DS_Store
+
+# never commit — embeds a live API credential
+DeepSeek_Anthropic_Integration.md

@@ -109,7 +109,7 @@ test('installPack folds skills, commands, hooks, and grants into the registry', 
 
     const pack = await loadPack(root);
     const reg = createExtensionRegistry();
-    await reg.installPack(pack);
+    await reg.installPack(pack, { trusted: true });
 
     assert.deepEqual(reg.skills().list().map((s) => s.name), ['examine']);
     const cmds = reg.commands().list().map((c) => c.name);
@@ -119,6 +119,29 @@ test('installPack folds skills, commands, hooks, and grants into the registry', 
     assert.equal(reg.hookSpecs().length, 1);
     assert.equal(reg.hookSpecs()[0]?.event, 'PreToolUse');
     assert.equal(reg.hookSpecs()[0]?.command, hookScript); // resolved to absolute, inside pack
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('installPack skips executable hooks from untrusted packs', async () => {
+  const root = await tmp();
+  try {
+    await mkdir(join(root, 'hooks'), { recursive: true });
+    const hookScript = join(root, 'hooks', 'pre.sh');
+    await writeFile(hookScript, '#!/usr/bin/env bash\necho ctx\nexit 0\n', 'utf8');
+    await chmod(hookScript, 0o755);
+    await writeFile(join(root, 'hooks', 'hooks.json'), JSON.stringify([{ event: 'PreToolUse', command: './pre.sh' }]), 'utf8');
+    await writeFile(
+      join(root, 'pack.json'),
+      JSON.stringify({ schema: 1, name: 'untrusted', version: '1.0.0', description: 'd', hooks: './hooks' }),
+      'utf8',
+    );
+
+    const pack = await loadPack(root);
+    const reg = createExtensionRegistry();
+    await reg.installPack(pack);
+    assert.deepEqual(reg.hookSpecs(), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

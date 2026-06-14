@@ -12,6 +12,7 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { scrubbedSubprocessEnv } from '../providers/credentials.ts';
 
 export const HOOK_EVENTS = [
   'PreToolUse',
@@ -121,6 +122,8 @@ export function createHookBus(hooks: readonly HookSpec[], opts: HookBusOpts): Ho
 
 export interface SpawnRunnerOpts {
   readonly timeoutMs?: number;
+  readonly cwd?: string;
+  readonly maxOutputBytes?: number;
 }
 
 // Loads a user-level hooks.json (e.g. ./.vegito/hooks.json): an array of
@@ -164,6 +167,15 @@ export async function loadHooksFile(file: string): Promise<readonly HookSpec[]> 
 }
 
 const DEFAULT_HOOK_TIMEOUT_MS = 10_000;
+const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
+
+function appendCapped(current: string, chunk: Buffer | string, maxBytes: number): string {
+  if (Buffer.byteLength(current, 'utf8') >= maxBytes) return current;
+  const next = chunk.toString();
+  const combined = current + next;
+  if (Buffer.byteLength(combined, 'utf8') <= maxBytes) return combined;
+  return combined.slice(0, maxBytes);
+}
 
 // Real runner: spawn the executable, write the JSON payload to stdin, capture
 // stdout/stderr, and enforce a hard timeout by killing the process group. A
@@ -171,12 +183,18 @@ const DEFAULT_HOOK_TIMEOUT_MS = 10_000;
 // classifies it as warn.
 export function spawnHookRunner(opts: SpawnRunnerOpts = {}): HookRunner {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS;
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   return {
     run: (spec, payloadJson) =>
       new Promise<HookRunResult>((resolve, reject) => {
         let child;
         try {
-          child = spawn(spec.command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+          child = spawn(spec.command, [], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            cwd: opts.cwd,
+            env: scrubbedSubprocessEnv(),
+            detached: process.platform !== 'win32',
+          });
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
           return;
@@ -187,12 +205,25 @@ export function spawnHookRunner(opts: SpawnRunnerOpts = {}): HookRunner {
         const timer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          child.kill('SIGKILL');
+          if (process.platform === 'win32') {
+            child.kill('SIGKILL');
+          } else {
+            try {
+              if (child.pid === undefined) throw new Error('hook process pid unavailable');
+              process.kill(-child.pid, 'SIGKILL');
+            } catch {
+              child.kill('SIGKILL');
+            }
+          }
           resolve({ code: 124, stdout, stderr: `${stderr}\nhook timed out after ${timeoutMs}ms` });
         }, timeoutMs);
 
-        child.stdout.on('data', (d) => (stdout += d.toString()));
-        child.stderr.on('data', (d) => (stderr += d.toString()));
+        child.stdout.on('data', (d) => {
+          stdout = appendCapped(stdout, d, maxOutputBytes);
+        });
+        child.stderr.on('data', (d) => {
+          stderr = appendCapped(stderr, d, maxOutputBytes);
+        });
         child.on('error', (err) => {
           if (settled) return;
           settled = true;

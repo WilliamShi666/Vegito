@@ -46,6 +46,37 @@ test('buildReviewer returns [] on unparseable output rather than throwing', asyn
   assert.deepEqual(await reviewer('t'), []);
 });
 
+test('buildReviewer schema-validates each observation kind', async () => {
+  const payload = JSON.stringify([
+    { kind: 'friction', summary: 'ok', constraint: 'Lead with the answer.' },
+    { kind: 'friction', summary: 'missing constraint' },
+    { kind: 'rubric_drift', summary: 'missing guidance', rubric: 'band-score' },
+    { kind: 'missing_skill', summary: 'bad skill type', skill: 7 },
+    { kind: 'memory_candidate', summary: 'bad level', fact: 'Prefers TS.', level: 'l9' },
+  ]);
+  const { call } = scripted(payload);
+  const reviewer = buildReviewer(call, signal);
+  const raws = await reviewer('transcript');
+  assert.equal(raws.length, 1);
+  assert.equal(raws[0]!.kind, 'friction');
+});
+
+test('buildReviewer rejects oversized fields and secret-shaped memory facts', async () => {
+  const huge = 'x'.repeat(5000);
+  const secretLike = ['sk', 'this-is-a-secret-shaped-token'].join('-');
+  const payload = JSON.stringify([
+    { kind: 'friction', summary: huge, constraint: 'Lead with the answer.' },
+    { kind: 'memory_candidate', summary: 'secret', fact: `DeepSeek key ${secretLike}`, level: 'l1' },
+    { kind: 'memory_candidate', summary: 'ok', fact: 'User prefers concise TypeScript reviews.', level: 'l1' },
+  ]);
+  const { call } = scripted(payload);
+  const reviewer = buildReviewer(call, signal);
+  const raws = await reviewer('transcript');
+  assert.equal(raws.length, 1);
+  assert.equal(raws[0]!.kind, 'memory_candidate');
+  if (raws[0]!.kind === 'memory_candidate') assert.equal(raws[0]!.fact, 'User prefers concise TypeScript reviews.');
+});
+
 test('buildReviewer sends the transcript in the user message and bounds tokens', async () => {
   const { call, reqs } = scripted('[]');
   const reviewer = buildReviewer(call, signal);

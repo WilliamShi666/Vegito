@@ -10,6 +10,7 @@ export {
   nextLevel,
   isMemoryLevel,
   isObservationKind,
+  validateRawObservation,
 } from './types.ts';
 export type {
   MemoryLevel,
@@ -18,6 +19,28 @@ export type {
   Observation,
   Proposal,
   ProvenanceRecord,
+  ArtifactKind,
+  EvolutionMetric,
+  EvolutionDecision,
+  ActivationEvidence,
+  EvolutionRun,
+  ProposerKind,
+  FailureLayer,
+  AtomicEditOperation,
+  EvalSuite,
+  CandidateProposer,
+  CandidateDiagnosis,
+  AtomicEdit,
+  ParetoMetadata,
+  CandidateBundle,
+  EvidenceContract,
+  EvalMetricSnapshot,
+  EditAblationResult,
+  EvalCase,
+  EvalReportMetrics,
+  EvalPromotionDecision,
+  CandidateEvalReport,
+  RejectedEditRecord,
 } from './types.ts';
 
 export { observe } from './observe.ts';
@@ -30,3 +53,38 @@ export type { ProposeOpts } from './propose.ts';
 
 export { applyProposals, revert, bumpVersion } from './apply.ts';
 export type { Gate, GateVerdict, ApplyOpts, ApplyResult } from './apply.ts';
+
+export { artifactForProposal, validateProposalTarget } from './artifacts.ts';
+export type { ArtifactAdapter, ProposalTargetValidation } from './artifacts.ts';
+
+export { buildEvolutionRun, appendEvolutionRun, EVOLUTION_RUNS } from './evaluation.ts';
+
+export {
+  candidateToProposal,
+  defaultEvidenceContract,
+  editFingerprint,
+  validateCandidateBundle,
+} from './candidate.ts';
+export type { CandidateValidation } from './candidate.ts';
+
+export { importGepaCandidate } from './gepa.ts';
+
+export { evaluateCandidateBundle } from './post_gepa_eval.ts';
+export type { EvaluateCandidateOpts } from './post_gepa_eval.ts';
+
+export { validateEvalCases } from './eval_cases.ts';
+export type { EvalCasesValidation } from './eval_cases.ts';
+
+export {
+  EDIT_LEDGER,
+  REJECTED_EDITS,
+  appendEditLedgerRecords,
+  appendRejectedEditRecords,
+  loadRejectedFingerprints,
+  toEditLedgerRecords,
+  toRejectedEditRecords,
+} from './ledger.ts';
+export type { EditLedgerRecord } from './ledger.ts';
+
+export { promotionPlanFromEval } from './promotion.ts';
+export type { PromotionPlan } from './promotion.ts';

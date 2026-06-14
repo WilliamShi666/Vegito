@@ -11,7 +11,7 @@
 //   4. bypass mode               → allow
 //   5. rule tables (ask > allow) → that verdict
 //   6. acceptEdits + in-ws write → allow
-//   7. defaults                  → read allow; write/execute/network ask
+//   7. defaults                  → in-workspace read allow; outside read/write/execute/network ask
 //
 // For bash execute keys the floor scans the RAW command first (a backstop for
 // patterns hidden from the tokenizer), then analyzeShell vets structure:
@@ -102,8 +102,12 @@ export function createEngine(options: EngineOptions): Engine {
       if (resolveWithin(workspace, key.target).inside) return 'allow';
     }
 
-    // 7. defaults: reads allow; everything else asks.
-    return key.action === 'read' ? 'allow' : 'ask';
+    // 7. defaults: reads are only auto-allowed when workspace-contained.
+    if (key.action === 'read') {
+      if (key.target === undefined) return 'allow';
+      return resolveWithin(workspace, key.target).inside ? 'allow' : 'ask';
+    }
+    return 'ask';
   };
 
   // A bash command is the worst verdict across its pipeline stages. The floor

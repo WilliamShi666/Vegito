@@ -9,43 +9,61 @@
 // live wire is built from catalog + env credentials. Env reads stay inside
 // credentials.ts (A5); this module only orchestrates.
 
-import { readFile } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
-import { platform } from 'node:os';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { dirname, join, isAbsolute } from 'node:path';
 import { parseArgs, type ParsedCommand } from './args.ts';
 import { runHeadless } from '../headless.ts';
-import { runRepl, type ReplPorts } from '../repl.ts';
 import { assembleLoopDeps, runTurn, type CallModel } from '../runtime.ts';
 import { reduce } from '../../kernel/reducer.ts';
-import { initialState, type SessionState } from '../../kernel/state.ts';
-import type { LoopEvent } from '../../kernel/events.ts';
-import type { TurnResult } from '../../kernel/loop.ts';
+import { initialState } from '../../kernel/state.ts';
 import { VERSION } from '../../version.ts';
 import { loadConfig } from '../../config/load.ts';
 import type { VegitoConfig, PermissionMode } from '../../config/schema.ts';
-import { createSystemPrompt } from '../../context/prompt.ts';
-import { IDENTITY, CONSTITUTION } from '../../context/identity.ts';
-import { discoverMemoryFiles } from '../../context/discovery.ts';
-import { ToolRegistry } from '../../tools/registry.ts';
-import { makeBuiltinTools, type BuiltinSet } from '../../tools/index.ts';
-import type { SkillSource, SkillMeta } from '../../tools/builtin/skill.ts';
 import { createStore } from '../../sessions/store.ts';
+import type { Transcript } from '../../sessions/transcript.ts';
 import { loadPack } from '../../extend/packs.ts';
 import { validatePack } from '../../extend/pack-validate.ts';
-import { loadHooksFile, createHookBus, spawnHookRunner, type HookBus } from '../../extend/hooks.ts';
+import type { HookBus } from '../../extend/hooks.ts';
+import {
+  appendHistoryDelta,
+  buildHooks,
+  buildRegistry,
+  buildSystemTiers,
+  cwdFor,
+  expandPath,
+  loadActivePacks,
+  replCommands,
+  runInteractiveTranscript,
+  type ActivePack,
+} from './runtime-support.ts';
 import { planFromFlags, inferPlan, interview, planToSpec, type ForgePlan } from '../../forge/interview.ts';
 import { generatePack } from '../../forge/generate.ts';
 import { enrichSpec } from '../../forge/enrich.ts';
-import { observe, propose, applyProposals, revert, buildReviewer, type Gate } from '../../evolve/index.ts';
+import { forgeNativeSpec } from '../../forge/native-blueprint.ts';
+import {
+  observe,
+  propose,
+  applyProposals,
+  revert,
+  buildReviewer,
+  evaluateCandidateBundle,
+  validateCandidateBundle,
+  validateEvalCases,
+  appendEditLedgerRecords,
+  appendRejectedEditRecords,
+  loadRejectedFingerprints,
+  promotionPlanFromEval,
+  toEditLedgerRecords,
+  toRejectedEditRecords,
+  type Gate,
+} from '../../evolve/index.ts';
 import { countNegativeConstraints } from '../../extend/pack-validate.ts';
 import { createEngine } from '../../permissions/engine.ts';
 import type { PermKey } from '../../tools/spec.ts';
-import { BUILTIN_CATALOG } from '../../providers/catalog.ts';
-import { resolveProfile } from '../../providers/profile.ts';
-import { credentialFromEnv, baseUrlFromEnv } from '../../providers/credentials.ts';
-import { buildWire, envVarForWire } from '../../providers/resolve.ts';
-import { ScriptedWire, type ScriptedStep } from '../../providers/wire/scripted.ts';
-import type { NeutralRequest, ProviderEvent } from '../../providers/types.ts';
+import type { NeutralMsg, ProviderEvent } from '../../providers/types.ts';
+import { buildCallModel, catalogFilesFor, effectiveConfig, usage, writeCatalogWarnings, type ModelSeam } from './dispatch-support.ts';
+
+export { buildCallModel } from './dispatch-support.ts';
 
 export interface DispatchPorts {
   readonly write: (s: string) => void;
@@ -59,111 +77,37 @@ export interface DispatchPorts {
 }
 
 const APP_VERSION = VERSION;
-const NO_SKILLS: SkillSource = { list: (): readonly SkillMeta[] => [], load: async () => undefined };
-
-function usage(): string {
-  return [
-    'usage: vegito <command> [options]',
-    '',
-    'commands:',
-    '  run -p <prompt> [--json] [--model m] [--mode default|acceptEdits|plan|bypass] [--cwd dir] [--script file]',
-    '  repl [--model m] [--mode ...] [--cwd dir]',
-    '  sessions list|resume <sid>|fork <sid> <recordId>',
-    '  packs list|validate <dir>',
-    '  forge [--offline] [--archetype id] [--domain "..."] [--name id] [--from docs] [--out dir]',
-    '  evolve <pack> --session <sid> [--mode ...] [--script file]   (review a session, apply learned improvements)',
-    '  evolve revert <pack>                                         (undo the last applied batch)',
-    '  version | help',
-    '',
-  ].join('\n');
-}
-
-function effectiveConfig(base: VegitoConfig, c: ParsedCommand): VegitoConfig {
-  if (c.cmd !== 'run' && c.cmd !== 'repl') return base;
-  let cfg = base;
-  if (c.model !== undefined) cfg = { ...cfg, model: c.model };
-  if (c.mode !== undefined) cfg = { ...cfg, permissionMode: c.mode };
-  return cfg;
-}
-
-// Build the model-call seam. `--script` reads a fixture and plays it through
-// ScriptedWire (offline); otherwise resolve a catalog profile + env credential
-// and build the live wire. modelId is the canonical id the request body must
-// carry — aliases like 'haiku' are resolved here, or gateways reject them.
-export async function buildCallModel(
-  model: string,
-  scriptPath: string | undefined,
-): Promise<{ callModel: CallModel; providerName: string; modelId: string }> {
-  if (scriptPath !== undefined) {
-    const text = await readFile(scriptPath, 'utf8');
-    const steps = JSON.parse(text) as readonly ScriptedStep[];
-    const wire = new ScriptedWire(steps);
-    return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name, modelId: model };
-  }
-  const profile = resolveProfile(BUILTIN_CATALOG, model);
-  if (profile === undefined) throw new Error(`unknown model: ${model} (not in catalog)`);
-  const envVar = envVarForWire(profile.wire);
-  const credential = credentialFromEnv(profile.wire, envVar, profile.wire);
-  if (credential === null) throw new Error(`missing credential: set ${envVar} to use ${profile.id}`);
-  const baseUrl = baseUrlFromEnv(profile.wire);
-  const wire = buildWire(profile, credential, baseUrl === undefined ? {} : { baseUrl });
-  return { callModel: (req: NeutralRequest, sig: AbortSignal) => wire.send(req, sig), providerName: wire.name, modelId: profile.id };
-}
-
-async function buildSystemTiers(cwd: string, homeDir: string): Promise<readonly string[]> {
-  let memoryFiles: ReturnType<typeof discoverMemoryFiles> = [];
-  try {
-    memoryFiles = discoverMemoryFiles({ cwd, home: homeDir });
-  } catch {
-    memoryFiles = [];
-  }
-  const prompt = createSystemPrompt({
-    identity: IDENTITY,
-    constitution: CONSTITUTION,
-    environment: { cwd, platform: platform(), date: new Date().toISOString().slice(0, 10) },
-    memoryFiles,
-    packs: [],
-  });
-  return prompt.tiers();
-}
-
-function buildRegistry(memoryDir: string): { registry: ToolRegistry; builtins: BuiltinSet } {
-  const registry = new ToolRegistry();
-  const builtins = makeBuiltinTools({ memoryDir, skills: NO_SKILLS });
-  for (const tool of builtins.tools) registry.register(tool);
-  return { registry, builtins };
-}
-
-// Project-level hooks: ./.vegito/hooks.json in the workspace, same layering
-// spirit as config. A malformed file throws (callers abort the run) — hooks
-// are the user's guardrails, so dropping them silently is the wrong failure.
-async function buildHooks(cwd: string): Promise<HookBus | undefined> {
-  const specs = await loadHooksFile(join(cwd, '.vegito', 'hooks.json'));
-  if (specs.length === 0) return undefined;
-  return createHookBus(specs, { runner: spawnHookRunner() });
-}
 
 async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: DispatchPorts): Promise<number> {
-  const cwd = ports.cwd;
+  const cwd = cwdFor(c, ports.cwd);
   const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
   for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const config = effectiveConfig(loaded.config, c);
 
-  let seam: { callModel: CallModel; providerName: string; modelId: string };
+  let seam: ModelSeam;
   try {
-    seam = await buildCallModel(config.model, c.script);
+    seam = await buildCallModel(config.model, c.script, catalogFilesFor(config, cwd, ports.homeDir));
+    writeCatalogWarnings(seam.warnings, ports);
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 
-  const { registry, builtins } = buildRegistry(join(ports.homeDir, '.vegito', 'memory'));
-  const systemTiers = await buildSystemTiers(cwd, ports.homeDir);
+  let activePacks: readonly ActivePack[];
+  try {
+    activePacks = await loadActivePacks(c.packs, config, cwd, ports.homeDir);
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const { registry, builtins, hookSpecs } = await buildRegistry(join(ports.homeDir, '.vegito', 'memory'), activePacks);
+  const systemTiers = await buildSystemTiers(cwd, ports.homeDir, activePacks.map((p) => p.pack));
   const signal = ports.signal ?? new AbortController().signal;
 
   let hooks: HookBus | undefined;
   try {
-    hooks = await buildHooks(cwd);
+    hooks = await buildHooks(cwd, hookSpecs);
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     builtins.dispose();
@@ -182,7 +126,9 @@ async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: Dispatch
     ...(hooks === undefined ? {} : { hooks }),
   });
 
-  const sid = `run-${APP_VERSION}`;
+  const store = createStore({ root: join(ports.homeDir, '.vegito', 'sessions'), appVersion: APP_VERSION });
+  const transcript = await store.create(cwd);
+  const sid = transcript.sid;
   const start = reduce(initialState({ sid, model: seam.modelId, maxIterations: config.maxIterations }), {
     t: 'user_msg',
     blocks: [{ kind: 'text', text: c.prompt }],
@@ -191,6 +137,7 @@ async function cmdRun(c: Extract<ParsedCommand, { cmd: 'run' }>, ports: Dispatch
   try {
     const gen = runTurn(start, deps);
     const result = await runHeadless(gen, { write: ports.write, json: c.json });
+    await appendHistoryDelta(transcript, 0, result.state);
     return result.code;
   } finally {
     builtins.dispose();
@@ -202,26 +149,35 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
     ports.writeErr('repl requires an input stream\n');
     return 1;
   }
-  const cwd = ports.cwd;
+  const cwd = cwdFor(c, ports.cwd);
   const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
   for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const config = effectiveConfig(loaded.config, c);
 
-  let seam: { callModel: CallModel; providerName: string; modelId: string };
+  let seam: ModelSeam;
   try {
-    seam = await buildCallModel(config.model, c.script);
+    seam = await buildCallModel(config.model, c.script, catalogFilesFor(config, cwd, ports.homeDir));
+    writeCatalogWarnings(seam.warnings, ports);
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 
-  const { registry, builtins } = buildRegistry(join(ports.homeDir, '.vegito', 'memory'));
-  const systemTiers = await buildSystemTiers(cwd, ports.homeDir);
+  let activePacks: readonly ActivePack[];
+  try {
+    activePacks = await loadActivePacks(c.packs, config, cwd, ports.homeDir);
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const { registry, builtins, hookSpecs, commands } = await buildRegistry(join(ports.homeDir, '.vegito', 'memory'), activePacks);
+  const systemTiers = await buildSystemTiers(cwd, ports.homeDir, activePacks.map((p) => p.pack));
   const signal = ports.signal ?? new AbortController().signal;
 
   let hooks: HookBus | undefined;
   try {
-    hooks = await buildHooks(cwd);
+    hooks = await buildHooks(cwd, hookSpecs);
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     builtins.dispose();
@@ -240,34 +196,20 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
     ...(hooks === undefined ? {} : { hooks }),
   });
 
-  // The REPL keeps one evolving session: each line reduces into history, then
-  // a turn runs. settleAsk bridges permission asks to the next input line.
-  let state: SessionState = initialState({ sid: `repl-${APP_VERSION}`, model: seam.modelId, maxIterations: config.maxIterations });
-
-  const replPorts: ReplPorts = {
-    nextLine: ports.nextLine,
-    write: ports.write,
-    startTurn: (text: string): AsyncGenerator<LoopEvent, TurnResult> => {
-      state = reduce(state, { t: 'user_msg', blocks: [{ kind: 'text', text }] });
-      const gen = runTurn(state, deps);
-      // Capture the post-turn state so the next line continues the conversation.
-      return (async function* (): AsyncGenerator<LoopEvent, TurnResult> {
-        let step = await gen.next();
-        while (!step.done) {
-          yield step.value;
-          step = await gen.next();
-        }
-        state = step.value.state;
-        return step.value;
-      })();
-    },
-    settleAsk: (askId: string, answer: string): void => {
-      deps.exec.engine.broker.settle(askId, answer);
-    },
-  };
+  const store = createStore({ root: join(ports.homeDir, '.vegito', 'sessions'), appVersion: APP_VERSION });
+  const transcript = await store.create(cwd);
 
   try {
-    await runRepl(replPorts);
+    await runInteractiveTranscript({
+      transcript,
+      initialMessages: [],
+      modelId: seam.modelId,
+      maxIterations: config.maxIterations,
+      deps,
+      commands: replCommands(commands),
+      nextLine: ports.nextLine,
+      write: ports.write,
+    });
     return 0;
   } finally {
     builtins.dispose();
@@ -275,22 +217,143 @@ async function cmdRepl(c: Extract<ParsedCommand, { cmd: 'repl' }>, ports: Dispat
 }
 
 async function cmdSessions(c: Extract<ParsedCommand, { cmd: 'sessions' }>, ports: DispatchPorts): Promise<number> {
+  const cwd = cwdFor(c, ports.cwd);
   const store = createStore({ root: join(ports.homeDir, '.vegito', 'sessions'), appVersion: APP_VERSION });
   if (c.sub === 'list') {
-    const summaries = await store.list(ports.cwd).catch(() => []);
+    const summaries = await store.list(cwd).catch(() => []);
     if (summaries.length === 0) ports.write('no sessions\n');
     for (const s of summaries) ports.write(`${s.sid}  (${s.messageCount} msgs)  ${s.preview}\n`);
     return 0;
   }
-  // resume/fork re-enter an interactive session; the surface is parsed and
-  // routed here, but live replay wiring lands with the REPL session work.
-  ports.writeErr(`sessions ${c.sub} is not wired to an interactive session yet\n`);
-  return 1;
+  if (ports.nextLine === undefined) {
+    ports.writeErr(`sessions ${c.sub} requires an input stream\n`);
+    return 1;
+  }
+  if (c.target === undefined) {
+    ports.writeErr(`sessions ${c.sub} needs a session id\n`);
+    return 2;
+  }
+
+  let transcript: Transcript;
+  try {
+    transcript =
+      c.sub === 'resume'
+        ? await store.resume(cwd, c.target)
+        : await store.fork(cwd, c.target, c.at ?? '');
+  } catch (err) {
+    ports.writeErr(`cannot ${c.sub} session ${c.target}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  if (c.sub === 'fork') ports.write(`forked ${c.target} at ${c.at} -> ${transcript.sid}\n`);
+
+  let initialMessages: readonly NeutralMsg[];
+  try {
+    initialMessages = await store.resolve(cwd, transcript.sid);
+  } catch (err) {
+    ports.writeErr(`cannot resolve session ${transcript.sid}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
+  for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
+  const config = loaded.config;
+
+  let seam: ModelSeam;
+  try {
+    seam = await buildCallModel(config.model, c.script, catalogFilesFor(config, cwd, ports.homeDir));
+    writeCatalogWarnings(seam.warnings, ports);
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const { registry, builtins, hookSpecs, commands } = await buildRegistry(join(ports.homeDir, '.vegito', 'memory'));
+  const systemTiers = await buildSystemTiers(cwd, ports.homeDir);
+  const signal = ports.signal ?? new AbortController().signal;
+
+  let hooks: HookBus | undefined;
+  try {
+    hooks = await buildHooks(cwd, hookSpecs);
+  } catch (err) {
+    ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
+    builtins.dispose();
+    return 1;
+  }
+
+  const deps = assembleLoopDeps({
+    providerName: seam.providerName,
+    callModel: seam.callModel,
+    registry,
+    workspace: cwd,
+    mode: config.permissionMode,
+    systemTiers,
+    config,
+    signal,
+    ...(hooks === undefined ? {} : { hooks }),
+  });
+
+  try {
+    await runInteractiveTranscript({
+      transcript,
+      initialMessages,
+      modelId: seam.modelId,
+      maxIterations: config.maxIterations,
+      deps,
+      commands: replCommands(commands),
+      nextLine: ports.nextLine,
+      write: ports.write,
+    });
+    return 0;
+  } finally {
+    builtins.dispose();
+  }
 }
 
 async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: DispatchPorts): Promise<number> {
+  const cwd = cwdFor(c, ports.cwd);
   if (c.sub === 'list') {
-    ports.write('pack discovery from config dirs is not configured in this build\n');
+    const loaded = await loadConfig({ homeDir: ports.homeDir, cwd });
+    for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
+    let count = 0;
+    for (const rootSpec of loaded.config.packRoots) {
+      const root = expandPath(rootSpec, cwd, ports.homeDir);
+      let entries: string[];
+      try {
+        entries = await readdir(root);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        try {
+          const pack = await loadPack(join(root, entry));
+          ports.write(`${pack.manifest.name}  v${pack.manifest.version}  ${pack.root}\n`);
+          count += 1;
+        } catch {
+          continue;
+        }
+      }
+    }
+    if (count === 0) ports.write('no packs\n');
+    return 0;
+  }
+  if (c.sub === 'trust') {
+    if (c.path === undefined) {
+      ports.writeErr('packs trust needs a pack name or directory\n');
+      return 2;
+    }
+    const dir = join(ports.homeDir, '.vegito');
+    const file = join(dir, 'trusted-packs.json');
+    let existing: readonly string[] = [];
+    try {
+      const raw = JSON.parse(await readFile(file, 'utf8')) as unknown;
+      existing = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+    } catch {
+      existing = [];
+    }
+    const next = [...new Set([...existing, c.path])].sort();
+    await mkdir(dir, { recursive: true });
+    await writeFile(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    ports.write(`trusted pack: ${c.path}\n`);
     return 0;
   }
   // validate
@@ -298,10 +361,11 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
     ports.writeErr('packs validate needs a pack directory\n');
     return 2;
   }
+  const packPath = expandPath(c.path, cwd, ports.homeDir);
   try {
-    const result = await validatePack(c.path);
+    const result = await validatePack(packPath);
     if (result.ok) {
-      const pack = await loadPack(c.path);
+      const pack = await loadPack(packPath);
       ports.write(`pack "${pack.manifest.name}" v${pack.manifest.version} — valid\n`);
       return 0;
     }
@@ -319,6 +383,8 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
 // deterministic and provider-free; the acceptance path. Output goes to --out or
 // ./<pack-name> under cwd.
 async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: DispatchPorts): Promise<number> {
+  if (c.native) return cmdForgeNative(c, ports);
+
   const plan = await resolveForgePlan(c, ports);
   if (plan === undefined) return 2; // message already written
   if ('error' in plan) {
@@ -334,7 +400,8 @@ async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: Disp
     try {
       const loaded = await loadConfig({ homeDir: ports.homeDir, cwd: ports.cwd });
       const cfg = loaded.config;
-      const { callModel, modelId } = await buildCallModel(cfg.model, c.script);
+      const { callModel, modelId, warnings } = await buildCallModel(cfg.model, c.script, catalogFilesFor(cfg, ports.cwd, ports.homeDir));
+      writeCatalogWarnings(warnings, ports);
       spec = await enrichSpec(spec, callModel, ports.signal ?? new AbortController().signal, modelId);
     } catch (err) {
       ports.writeErr(`note: persona enrichment skipped (${err instanceof Error ? err.message : String(err)})\n`);
@@ -357,6 +424,70 @@ async function cmdForge(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: Disp
   }
 
   ports.write(`forged pack "${spec.name}" (${plan.archetype}) at ${outDir}\n`);
+  ports.write(`  ${spec.agents.length} agents, ${spec.rubrics.length} rubric(s) — validated clean\n`);
+  ports.write(`  enable with: vegito packs validate ${outDir}\n`);
+  return 0;
+}
+
+async function cmdForgeNative(c: Extract<ParsedCommand, { cmd: 'forge' }>, ports: DispatchPorts): Promise<number> {
+  if (c.offline) {
+    ports.writeErr('forge --native needs a model call; remove --offline or provide --script for deterministic tests\n');
+    return 2;
+  }
+  if (c.archetype !== undefined) {
+    ports.writeErr('forge --native does not accept --archetype; native generation is template-isolated\n');
+    return 2;
+  }
+
+  let docs: string | undefined;
+  if (c.from !== undefined) {
+    try {
+      docs = await readFile(c.from, 'utf8');
+    } catch (err) {
+      ports.writeErr(`cannot read --from ${c.from}: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 2;
+    }
+  }
+  if (c.domain === undefined && docs === undefined) {
+    ports.writeErr('forge --native needs --domain or --from docs\n');
+    return 2;
+  }
+
+  let spec: Awaited<ReturnType<typeof forgeNativeSpec>>;
+  try {
+    const loaded = await loadConfig({ homeDir: ports.homeDir, cwd: ports.cwd });
+    const cfg = loaded.config;
+    const { callModel, modelId, warnings } = await buildCallModel(cfg.model, c.script, catalogFilesFor(cfg, ports.cwd, ports.homeDir));
+    writeCatalogWarnings(warnings, ports);
+    spec = await forgeNativeSpec({
+      ...(c.domain !== undefined ? { domain: c.domain } : {}),
+      ...(docs !== undefined ? { docs } : {}),
+      ...(c.name !== undefined ? { name: c.name } : {}),
+      callModel,
+      signal: ports.signal ?? new AbortController().signal,
+      model: modelId,
+    });
+  } catch (err) {
+    ports.writeErr(`native forge failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const outDir = c.out ?? join(ports.cwd, spec.name);
+  try {
+    await generatePack(outDir, spec);
+  } catch (err) {
+    ports.writeErr(`forge failed to write pack: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const result = await validatePack(outDir);
+  if (!result.ok) {
+    ports.writeErr(`forged pack failed validation — ${result.problems.length} problem(s):\n`);
+    for (const p of result.problems) ports.writeErr(`  - ${p}\n`);
+    return 1;
+  }
+
+  ports.write(`forged pack "${spec.name}" (native) at ${outDir}\n`);
   ports.write(`  ${spec.agents.length} agents, ${spec.rubrics.length} rubric(s) — validated clean\n`);
   ports.write(`  enable with: vegito packs validate ${outDir}\n`);
   return 0;
@@ -434,6 +565,81 @@ async function cmdEvolve(c: Extract<ParsedCommand, { cmd: 'evolve' }>, ports: Di
     ports.write(`reverted "${c.pack}" from ${rec.version} to ${rec.prevVersion}\n`);
     return 0;
   }
+  if (c.sub === 'eval') {
+    const pack = await loadPack(root);
+    if (c.candidate === undefined || c.evalCases === undefined) {
+      ports.write(`evolve eval: pack "${pack.manifest.name}" baseline ${pack.manifest.version}; 0 candidate(s), 0 applied\n`);
+      return 0;
+    }
+    let candidateRaw: unknown;
+    let casesRaw: unknown;
+    try {
+      candidateRaw = JSON.parse(await readFile(isAbsolute(c.candidate) ? c.candidate : join(ports.cwd, c.candidate), 'utf8'));
+      casesRaw = JSON.parse(await readFile(isAbsolute(c.evalCases) ? c.evalCases : join(ports.cwd, c.evalCases), 'utf8'));
+    } catch (err) {
+      ports.writeErr(`cannot read evolve eval input: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+    const validated = validateCandidateBundle(candidateRaw);
+    if (!validated.ok) {
+      ports.writeErr(`invalid candidate: ${validated.reason}\n`);
+      return 1;
+    }
+    const validatedCases = validateEvalCases(casesRaw);
+    if (!validatedCases.ok) {
+      ports.writeErr(`invalid evolve eval case: ${validatedCases.reason}\n`);
+      return 1;
+    }
+    const rejectedFingerprints = await loadRejectedFingerprints(root);
+    const report = evaluateCandidateBundle(validated.value, validatedCases.value, { rejectedFingerprints });
+    const text = `${JSON.stringify(report, null, 2)}\n`;
+    if (c.report !== undefined) {
+      const reportPath = isAbsolute(c.report) ? c.report : join(ports.cwd, c.report);
+      await mkdir(dirname(reportPath), { recursive: true });
+      await writeFile(reportPath, text, 'utf8');
+    }
+    if (!c.apply && report.decision.verdict !== 'rejected') {
+      await appendEditLedgerRecords(
+        root,
+        toEditLedgerRecords(
+          validated.value,
+          report,
+          report.decision.verdict === 'partial' ? 'partial' : 'accepted',
+        ),
+      );
+    }
+    await appendRejectedEditRecords(root, toRejectedEditRecords(validated.value, report));
+    if (c.apply && report.decision.verdict !== 'rejected') {
+      const plan = promotionPlanFromEval(validated.value, report);
+      if (plan.problems.length > 0) {
+        ports.writeErr(`candidate cannot be promoted durably:\n`);
+        for (const problem of plan.problems) ports.writeErr(`  - ${problem}\n`);
+        return 1;
+      }
+      const applyResult = await applyProposals(root, plan.proposals, buildEvolveGate(root, c.mode ?? 'acceptEdits'), {
+        sids: validated.value.diagnosis.evidenceIds,
+      });
+      if (applyResult.problems && applyResult.problems.length > 0 && applyResult.applied.length === 0) {
+        ports.writeErr(`candidate promotion failed — pack rolled back:\n`);
+        for (const problem of applyResult.problems) ports.writeErr(`  - ${problem}\n`);
+        return 1;
+      }
+      if (applyResult.denied.length > 0) {
+        ports.writeErr(`candidate promotion denied ${applyResult.denied.length} proposal(s)\n`);
+        return 1;
+      }
+      await appendEditLedgerRecords(
+        root,
+        toEditLedgerRecords(
+          validated.value,
+          report,
+          report.decision.verdict === 'partial' ? 'partial' : 'accepted',
+        ),
+      );
+    }
+    ports.write(text);
+    return 0;
+  }
 
   // run: review one session, propose, apply through the gate.
   if (c.session === undefined) {
@@ -450,12 +656,15 @@ async function cmdEvolve(c: Extract<ParsedCommand, { cmd: 'evolve' }>, ports: Di
   }
 
   const loaded = await loadConfig({ homeDir: ports.homeDir, cwd: ports.cwd });
+  for (const w of loaded.warnings) ports.writeErr(`config: ${w}\n`);
   const cfg = loaded.config;
   const signal = ports.signal ?? new AbortController().signal;
   let callModel: CallModel;
   let modelId: string;
   try {
-    ({ callModel, modelId } = await buildCallModel(cfg.model, c.script));
+    const seam = await buildCallModel(cfg.model, c.script, catalogFilesFor(cfg, ports.cwd, ports.homeDir));
+    writeCatalogWarnings(seam.warnings, ports);
+    ({ callModel, modelId } = seam);
   } catch (err) {
     ports.writeErr(`${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
@@ -476,19 +685,45 @@ async function cmdEvolve(c: Extract<ParsedCommand, { cmd: 'evolve' }>, ports: Di
     personaNegatives = 0;
   }
 
-  const proposals = propose(observations, { personaNegatives });
+  let pack: Awaited<ReturnType<typeof loadPack>>;
+  try {
+    pack = await loadPack(root);
+  } catch (err) {
+    ports.writeErr(`cannot load pack ${root}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  const proposals = propose(observations, {
+    personaNegatives,
+    knownRubrics: pack.manifest.rubrics.map((r) => r.name),
+  });
   if (proposals.length === 0) {
     ports.write(`${observations.length} observation(s), no actionable proposals — pack unchanged\n`);
+    return 0;
+  }
+
+  const shouldApply = c.apply || cfg.evolve.defaultApply;
+  if (!shouldApply) {
+    ports.write(`evolve review-only: ${observations.length} observation(s), ${proposals.length} proposal(s), 0 applied\n`);
+    for (const p of proposals) {
+      const target = p.kind === 'pack_edit' ? p.target : `memory/${p.to}.md`;
+      ports.write(`  - ${p.id} ${p.kind} -> ${target}\n`);
+    }
+    ports.write(`  apply with: vegito evolve ${c.pack} --session ${c.session} --apply\n`);
     return 0;
   }
 
   const gate = buildEvolveGate(root, c.mode ?? 'acceptEdits');
   const result = await applyProposals(root, proposals, gate, { sids: [c.session] });
 
-  if (result.problems && result.problems.length > 0) {
+  if (result.problems && result.problems.length > 0 && result.applied.length === 0) {
     ports.writeErr(`proposals failed validation — pack rolled back:\n`);
     for (const p of result.problems) ports.writeErr(`  - ${p}\n`);
     return 1;
+  }
+  if (result.problems && result.problems.length > 0) {
+    ports.writeErr(`some proposals were rejected before application:\n`);
+    for (const p of result.problems) ports.writeErr(`  - ${p}\n`);
   }
   ports.write(
     `evolve: ${observations.length} observation(s) → ${result.applied.length} applied, ${result.denied.length} denied\n`,

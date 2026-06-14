@@ -85,6 +85,20 @@ describe('engine — decision order', () => {
     assert.equal(verdictOf(await e.check(net('https://x.io'))), 'ask');
   });
 
+  test('default read allows only workspace-contained targets; outside workspace asks', async () => {
+    const e = make();
+    assert.equal(verdictOf(await e.check(read(join(ws, 'src', 'main.ts')))), 'allow');
+    assert.equal(verdictOf(await e.check(read('/etc/passwd'))), 'ask');
+    assert.equal(verdictOf(await e.check(read('../outside.txt'))), 'ask');
+  });
+
+  test('credential-path read floor denies even in bypass mode', async () => {
+    const e = make({ mode: 'bypass' });
+    for (const target of ['/etc/shadow', '/root/.ssh/id_ed25519', `${ws}/.aws/credentials`, `${ws}/.netrc`]) {
+      assert.equal(verdictOf(await e.check(read(target))), 'deny', target);
+    }
+  });
+
   test('ask>allow: when both an ask and an allow rule match, ask wins', async () => {
     const e = make({
       rules: [

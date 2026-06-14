@@ -20,6 +20,8 @@ import type { PermissionMode, VegitoConfig } from '../config/schema.ts';
 import type { NeutralRequest, ProviderEvent, ToolDef } from '../providers/types.ts';
 
 export type CallModel = (req: NeutralRequest, signal: AbortSignal) => AsyncIterable<ProviderEvent>;
+export type RuntimeConfig = Pick<VegitoConfig, 'maxIterations'> &
+  Partial<Pick<VegitoConfig, 'model' | 'permissionMode' | 'reasoningEffort' | 'trace'>>;
 
 export interface RuntimeOptions {
   /** Display name of the active provider (model_call events). */
@@ -35,7 +37,7 @@ export interface RuntimeOptions {
   /** Frozen system tiers (T1/T2) for the request prefix (D4). */
   readonly systemTiers: readonly string[];
   /** Merged config; supplies maxIterations and the per-request token ceiling. */
-  readonly config: VegitoConfig;
+  readonly config: RuntimeConfig;
   /** Turn-level abort. */
   readonly signal: AbortSignal;
   /** Permission rules; default none (mode alone governs). */
@@ -73,6 +75,7 @@ export function assembleLoopDeps(opts: RuntimeOptions): LoopDeps {
       messages: s.history,
       tools,
       maxTokens,
+      ...(opts.config.reasoningEffort === undefined ? {} : { reasoning: opts.config.reasoningEffort }),
     }),
     callModel: opts.callModel,
     exec: {

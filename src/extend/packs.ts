@@ -9,8 +9,8 @@
 // Tool grants default to empty: a pack gets no tools until its manifest names
 // them, and even then they run under the same permission gate (no backdoor).
 
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, join, normalize, sep } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, join, normalize, relative, sep } from 'node:path';
 
 export interface PackAgent {
   readonly name: string;
@@ -42,6 +42,7 @@ export interface PackManifest {
   readonly skills?: string;
   readonly commands?: string;
   readonly hooks?: string;
+  readonly evals?: string;
   readonly grants: readonly string[];
   readonly agents: readonly PackAgent[];
   readonly rubrics: readonly PackRubric[];
@@ -52,7 +53,7 @@ export interface PackManifest {
 }
 
 // Single-string path keys validated when present.
-const PATH_KEYS = ['persona', 'skills', 'commands', 'hooks', 'onboarding'] as const;
+const PATH_KEYS = ['persona', 'skills', 'commands', 'hooks', 'evals', 'onboarding'] as const;
 
 export function validatePackPath(_root: string, p: string): boolean {
   if (typeof p !== 'string' || p === '') return false;
@@ -169,6 +170,7 @@ export interface LoadedPack {
   readonly skillsDir?: string;
   readonly commandsDir?: string;
   readonly hooksDir?: string;
+  readonly evalsPath?: string;
 }
 
 // Every pack-relative path the manifest declares, across all sections. Used by
@@ -189,7 +191,13 @@ export function declaredPaths(manifest: PackManifest): readonly string[] {
 }
 
 export async function loadPack(root: string): Promise<LoadedPack> {
-  const manifestPath = join(root, 'pack.json');
+  let rootReal: string;
+  try {
+    rootReal = await realpath(root);
+  } catch {
+    throw new Error(`pack root not found: ${root}`);
+  }
+  const manifestPath = join(rootReal, 'pack.json');
   let text: string;
   try {
     text = await readFile(manifestPath, 'utf8');
@@ -203,12 +211,24 @@ export async function loadPack(root: string): Promise<LoadedPack> {
     if (!validatePackPath(root, p)) {
       throw new Error(`pack "${manifest.name}" declares an unsafe path: ${p} (must be ./-relative, no "..", inside the pack)`);
     }
+    const target = join(rootReal, p.replace(/^\.\//, '').split('/').join(sep));
+    try {
+      const targetReal = await realpath(target);
+      const rel = relative(rootReal, targetReal);
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new Error(`pack "${manifest.name}" declares a symlink escape: ${p}`);
+      }
+    } catch (err) {
+      if (err instanceof Error && /symlink escape/.test(err.message)) throw err;
+      // Missing declared files are semantic validation problems; loadPack only
+      // rejects existing paths that resolve outside the pack root.
+    }
   }
 
   const resolve = (rel: string | undefined): string | undefined =>
-    rel === undefined ? undefined : join(root, rel.replace(/^\.\//, '').split('/').join(sep));
+    rel === undefined ? undefined : join(rootReal, rel.replace(/^\.\//, '').split('/').join(sep));
 
-  const loaded: Record<string, unknown> = { root, manifest };
+  const loaded: Record<string, unknown> = { root: rootReal, manifest };
   const persona = resolve(manifest.persona);
   if (persona !== undefined) loaded['personaPath'] = persona;
   const skills = resolve(manifest.skills);
@@ -217,5 +237,7 @@ export async function loadPack(root: string): Promise<LoadedPack> {
   if (commands !== undefined) loaded['commandsDir'] = commands;
   const hooks = resolve(manifest.hooks);
   if (hooks !== undefined) loaded['hooksDir'] = hooks;
+  const evals = resolve(manifest.evals);
+  if (evals !== undefined) loaded['evalsPath'] = evals;
   return loaded as unknown as LoadedPack;
 }

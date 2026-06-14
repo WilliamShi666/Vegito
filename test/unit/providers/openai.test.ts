@@ -106,6 +106,19 @@ describe('buildOpenAiBody', () => {
       tool_calls: [{ id: 'c1', type: 'function', function: { name: 'ls', arguments: '{}' } }],
     });
   });
+
+  test('max reasoning maps to the strongest OpenAI-compatible effort enum', () => {
+    const body = buildOpenAiBody({
+      model: 'gpt-x',
+      system: [],
+      messages: [{ role: 'user', blocks: [{ kind: 'text', text: 'think hard' }] }],
+      tools: [],
+      maxTokens: 100,
+      reasoning: 'max',
+    });
+
+    assert.equal(body['reasoning_effort'], 'high');
+  });
 });
 
 function pushAll(tr: OpenAiEventTranslator, datas: readonly string[]): ProviderEvent[] {

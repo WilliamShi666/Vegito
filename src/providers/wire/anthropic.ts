@@ -17,7 +17,7 @@ import type {
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
-const THINKING_BUDGETS = { low: 2048, medium: 8192, high: 24576 } as const;
+const THINKING_BUDGETS = { low: 2048, medium: 8192, high: 24576, max: 65536 } as const;
 // headroom so thinking + a real answer both fit under max_tokens
 const THINKING_HEADROOM = 1024;
 

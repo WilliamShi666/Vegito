@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { resolveProfile, type ModelProfile } from '../../../src/providers/profile.ts';
 import { BUILTIN_CATALOG, mergeCatalog, loadCatalog } from '../../../src/providers/catalog.ts';
 
@@ -31,12 +31,12 @@ describe('resolveProfile', () => {
 });
 
 describe('BUILTIN_CATALOG', () => {
-  test('ships claude-fable-5 on the anthropic wire with reasoning support', () => {
-    const fable = resolveProfile(BUILTIN_CATALOG, 'claude-fable-5');
-    assert.ok(fable);
-    assert.equal(fable.wire, 'anthropic');
-    assert.equal(fable.reasoning, true);
-    assert.ok(fable.contextWindow >= 200000);
+  test('ships claude-sonnet-4-6 on the anthropic wire with reasoning support', () => {
+    const sonnet = resolveProfile(BUILTIN_CATALOG, 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.wire, 'anthropic');
+    assert.equal(sonnet.reasoning, true);
+    assert.ok(sonnet.contextWindow >= 200000);
   });
 
   test('every entry has a positive context window and output cap', () => {
@@ -53,13 +53,21 @@ describe('mergeCatalog', () => {
       [MINI],
       [
         { id: 'mini-1', wire: 'openai', contextWindow: 16000, maxOutput: 2000, reasoning: true },
-        { id: 'fresh', wire: 'anthropic', contextWindow: 100, maxOutput: 10, reasoning: false },
+        {
+          id: 'fresh',
+          wire: 'anthropic',
+          contextWindow: 100,
+          maxOutput: 10,
+          reasoning: false,
+          baseUrl: 'https://gateway.example/anthropic',
+        },
       ],
     );
     assert.deepEqual(warnings, []);
     assert.equal(catalog.length, 2);
     assert.equal(resolveProfile(catalog, 'mini-1')?.contextWindow, 16000);
     assert.equal(resolveProfile(catalog, 'fresh')?.wire, 'anthropic');
+    assert.equal(resolveProfile(catalog, 'fresh')?.baseUrl, 'https://gateway.example/anthropic');
   });
 
   test('invalid entries warn and are skipped, valid ones still land', () => {
@@ -110,5 +118,69 @@ describe('loadCatalog', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test('loads object-shaped catalog files with model metadata and aliases', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vegito-catalog-object-'));
+    try {
+      const file = join(dir, 'models.json');
+      await writeFile(
+        file,
+        JSON.stringify({
+          schema: 1,
+          models: {
+            'deepseek-v4-pro': {
+              wire: 'anthropic',
+              contextWindow: 128000,
+              maxOutput: 64000,
+              reasoning: true,
+              baseUrl: 'https://api.deepseek.com/anthropic',
+              aliases: ['deepseek-pro'],
+            },
+          },
+        }),
+      );
+
+      const result = await loadCatalog({ files: [file] });
+      assert.deepEqual(result.warnings, []);
+      assert.equal(resolveProfile(result.catalog, 'deepseek-pro')?.id, 'deepseek-v4-pro');
+      assert.equal(resolveProfile(result.catalog, 'deepseek-v4-pro')?.wire, 'anthropic');
+      assert.equal(resolveProfile(result.catalog, 'deepseek-v4-pro')?.baseUrl, 'https://api.deepseek.com/anthropic');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('loads multiple catalog overlays in order', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vegito-catalog-many-'));
+    try {
+      const first = join(dir, 'first.json');
+      const second = join(dir, 'second.json');
+      await writeFile(first, JSON.stringify([{ id: 'local', wire: 'openai', contextWindow: 1, maxOutput: 1, reasoning: false }]));
+      await writeFile(second, JSON.stringify([{ id: 'local', wire: 'anthropic', contextWindow: 2, maxOutput: 2, reasoning: true }]));
+
+      const result = await loadCatalog({ files: [first, second] });
+      assert.equal(result.warnings.length, 0);
+      assert.equal(resolveProfile(result.catalog, 'local')?.wire, 'anthropic');
+      assert.equal(resolveProfile(result.catalog, 'local')?.contextWindow, 2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('repository seed catalog contains DeepSeek Anthropic-compatible profiles', async () => {
+    const seed = resolve('catalog/models.json');
+    const result = await loadCatalog({ files: [seed] });
+    assert.deepEqual(result.warnings, []);
+    const pro = resolveProfile(result.catalog, 'deepseek-v4-pro');
+    const flash = resolveProfile(result.catalog, 'deepseek-v4-flash');
+    assert.equal(pro?.wire, 'anthropic');
+    assert.equal(pro?.baseUrl, 'https://api.deepseek.com/anthropic');
+    assert.equal(pro?.contextWindow, 1_000_000);
+    assert.equal(pro?.maxOutput, 384_000);
+    assert.equal(flash?.wire, 'anthropic');
+    assert.equal(flash?.baseUrl, 'https://api.deepseek.com/anthropic');
+    assert.equal(flash?.contextWindow, 1_000_000);
+    assert.equal(flash?.maxOutput, 384_000);
   });
 });

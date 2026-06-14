@@ -18,6 +18,50 @@ export interface LoadedConfig {
   warnings: string[];
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+function isProviderChains(value: unknown): value is Readonly<Record<string, readonly string[]>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(isStringArray);
+}
+
+function isCompaction(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    (obj['maxTokens'] === undefined || (typeof obj['maxTokens'] === 'number' && Number.isInteger(obj['maxTokens']))) &&
+    (obj['protectedTail'] === undefined || (typeof obj['protectedTail'] === 'number' && Number.isInteger(obj['protectedTail'])))
+  );
+}
+
+function isEvolve(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  return obj['defaultApply'] === undefined || typeof obj['defaultApply'] === 'boolean';
+}
+
+function customConfigError(key: keyof VegitoConfig, value: unknown): string | undefined {
+  if (key === 'providerChains' && !isProviderChains(value)) return 'expected an object of string arrays';
+  if (key === 'compaction' && !isCompaction(value)) return 'expected an object with integer maxTokens/protectedTail';
+  if (key === 'evolve' && !isEvolve(value)) return 'expected an object with boolean defaultApply';
+  return undefined;
+}
+
+function mergeValue(config: VegitoConfig, key: keyof VegitoConfig, value: unknown): VegitoConfig {
+  if (key === 'providerChains') {
+    return { ...config, providerChains: { ...config.providerChains, ...(value as Readonly<Record<string, readonly string[]>>) } };
+  }
+  if (key === 'compaction') {
+    return { ...config, compaction: { ...config.compaction, ...(value as Partial<VegitoConfig['compaction']>) } };
+  }
+  if (key === 'evolve') {
+    return { ...config, evolve: { ...config.evolve, ...(value as Partial<VegitoConfig['evolve']>) } };
+  }
+  return { ...config, [key]: value };
+}
+
 export function mergeConfig(layers: readonly ConfigLayer[]): LoadedConfig {
   const warnings: string[] = [];
   let config: VegitoConfig = CONFIG_DEFAULTS;
@@ -27,13 +71,19 @@ export function mergeConfig(layers: readonly ConfigLayer[]): LoadedConfig {
         warnings.push(`unknown config key "${key}" in ${layer.source} (ignored)`);
         continue;
       }
-      const schema = CONFIG_KEY_SCHEMAS[key as keyof VegitoConfig];
+      const configKey = key as keyof VegitoConfig;
+      const customError = customConfigError(configKey, value);
+      if (customError !== undefined) {
+        warnings.push(`invalid value for "${key}" in ${layer.source}: ${customError} (ignored)`);
+        continue;
+      }
+      const schema = CONFIG_KEY_SCHEMAS[configKey];
       const result = validate(schema, value);
       if (!result.ok) {
         warnings.push(`invalid value for "${key}" in ${layer.source}: ${result.errors[0]?.message} (ignored)`);
         continue;
       }
-      config = { ...config, [key]: value };
+      config = mergeValue(config, configKey, value);
     }
   }
   return { config: Object.freeze(config), warnings };

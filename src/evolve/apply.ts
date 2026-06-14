@@ -2,6 +2,9 @@ import { readFile, writeFile, mkdir, unlink, rm } from 'node:fs/promises';
 import { join, dirname, sep } from 'node:path';
 
 import { validatePack } from '../extend/pack-validate.ts';
+import { loadPack, type LoadedPack } from '../extend/packs.ts';
+import { validateProposalTarget } from './artifacts.ts';
+import { appendEvolutionRun, buildEvolutionRun, EVOLUTION_RUNS, type DecisionInput } from './evaluation.ts';
 import type { Proposal, ProvenanceRecord } from './types.ts';
 
 // apply (DESIGN §8): proposals → versioned, gated, revertible pack mutations.
@@ -16,6 +19,7 @@ export type Gate = (proposal: Proposal) => Promise<GateVerdict>;
 
 export interface ApplyOpts {
   readonly sids: readonly string[];
+  readonly datasets?: readonly string[];
 }
 
 export interface ApplyResult {
@@ -63,20 +67,98 @@ function memoryLine(fact: string, from: string, to: string, provenance: readonly
   return `- ${fact} (promoted ${from}→${to}${prov})\n`;
 }
 
+function systemProposal(id: string, target: string): Proposal {
+  return { kind: 'pack_edit', id, target, text: '', provenance: [] };
+}
+
+async function requireSystemWrite(gate: Gate, target: string): Promise<string | undefined> {
+  const verdict = await gate(systemProposal(`system:${target}`, target));
+  return verdict === 'allow' ? undefined : `system write denied: ${target}`;
+}
+
+function datasetIds(opts: ApplyOpts): readonly string[] {
+  return [...new Set([...opts.sids, ...(opts.datasets ?? [])])];
+}
+
+async function loadBaseline(root: string): Promise<{ pack: LoadedPack; version: string } | { problems: readonly string[] }> {
+  try {
+    const pack = await loadPack(root);
+    return { pack, version: pack.manifest.version };
+  } catch (err) {
+    return { problems: [err instanceof Error ? err.message : String(err)] };
+  }
+}
+
+async function maybeRecordRun(
+  root: string,
+  pack: LoadedPack,
+  proposals: readonly Proposal[],
+  decisions: readonly DecisionInput[],
+  opts: ApplyOpts,
+  baselineVersion: string,
+): Promise<void> {
+  if (proposals.length === 0 || decisions.length === 0) return;
+  const run = buildEvolutionRun(pack, proposals, {
+    baselineVersion,
+    datasetIds: datasetIds(opts),
+    constraints: [
+      'target containment',
+      'typed artifact adapters',
+      'hard pack validation',
+      'review-only by default',
+      'activation evidence required',
+    ],
+    decisions,
+  });
+  await appendEvolutionRun(root, run);
+}
+
 export async function applyProposals(
   root: string,
   proposals: readonly Proposal[],
   gate: Gate,
   opts: ApplyOpts,
 ): Promise<ApplyResult> {
+  const baseline = await loadBaseline(root);
+  if ('problems' in baseline) return { applied: [], denied: [], problems: baseline.problems };
+  const { pack, version: baselineVersion } = baseline;
+
   const allowed: Proposal[] = [];
   const denied: string[] = [];
+  const problems: string[] = [];
+  const decisions: DecisionInput[] = [];
+
   for (const p of proposals) {
+    const target = await validateProposalTarget(pack, p);
+    if (!target.ok) {
+      problems.push(`${p.id}: ${target.reason}`);
+      decisions.push({ candidateId: p.id, verdict: 'rejected', reasons: [target.reason] });
+      continue;
+    }
     const verdict = await gate(p);
-    if (verdict === 'allow') allowed.push(p);
-    else denied.push(p.id);
+    if (verdict === 'allow') {
+      allowed.push(p);
+      decisions.push({ candidateId: p.id, verdict: 'accepted', reasons: ['passed target validation and permission gate'] });
+    } else {
+      denied.push(p.id);
+      decisions.push({ candidateId: p.id, verdict: 'rejected', reasons: ['permission gate denied proposal write'] });
+    }
   }
-  if (allowed.length === 0) return { applied: [], denied };
+
+  const runGateProblem = await requireSystemWrite(gate, EVOLUTION_RUNS);
+  if (allowed.length === 0) {
+    if (runGateProblem === undefined) {
+      await maybeRecordRun(root, pack, proposals, decisions, opts, baselineVersion);
+    }
+    return problems.length > 0 ? { applied: [], denied, problems } : { applied: [], denied };
+  }
+
+  const systemProblems = [
+    runGateProblem,
+    await requireSystemWrite(gate, 'pack.json'),
+    await requireSystemWrite(gate, PROVENANCE),
+  ].filter((p): p is string => p !== undefined);
+  if (systemProblems.length > 0) return { applied: [], denied, problems: systemProblems };
 
   // Snapshot every file the batch will touch, plus pack.json (version bump),
   // capturing pre-mutation bytes exactly once (the earliest read wins).
@@ -119,6 +201,12 @@ export async function applyProposals(
   const validation = await validatePack(root);
   if (!validation.ok) {
     await restore(root, snapshot);
+    const failedDecisions = allowed.map((p): DecisionInput => ({
+      candidateId: p.id,
+      verdict: 'rejected',
+      reasons: validation.problems,
+    }));
+    await maybeRecordRun(root, pack, allowed, failedDecisions, opts, baselineVersion);
     return { applied: [], denied, problems: validation.problems };
   }
 
@@ -140,8 +228,9 @@ export async function applyProposals(
   const provPath = abs(root, PROVENANCE);
   const existing = (await readMaybe(provPath)) ?? '';
   await writeFile(provPath, existing + `${JSON.stringify(record)}\n`, 'utf8');
+  await maybeRecordRun(root, pack, proposals, decisions, opts, baselineVersion);
 
-  return { applied: allowed.map((p) => p.id), denied };
+  return problems.length > 0 ? { applied: allowed.map((p) => p.id), denied, problems } : { applied: allowed.map((p) => p.id), denied };
 }
 
 // Revert the most recent applied batch: restore its snapshot byte-identically

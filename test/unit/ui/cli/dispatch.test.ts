@@ -11,6 +11,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatch, buildCallModel, type DispatchPorts } from '../../../../src/ui/cli/dispatch.ts';
 import { scriptedText } from '../../../../src/providers/wire/scripted.ts';
+import { createStore } from '../../../../src/sessions/store.ts';
+import { loadPack } from '../../../../src/extend/packs.ts';
+import { createExtensionRegistry } from '../../../../src/extend/registry.ts';
 
 function collector(): { out: string[]; err: string[]; ports: (extra: Partial<DispatchPorts>) => DispatchPorts } {
   const out: string[] = [];
@@ -70,6 +73,40 @@ test('run with a scripted wire streams the assistant text and exits 0', async ()
   assert.match(out.join(''), /hello from vegito/);
 });
 
+test('run honors --cwd as the effective workspace for tools and sessions', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const caller = await mkdtemp(join(tmpdir(), 'vegito-caller-'));
+  const project = join(home, 'project');
+  await mkdir(project, { recursive: true });
+  const steps = [
+    {
+      kind: 'events',
+      events: [
+        { t: 'msg_start', model: 'scripted-1' },
+        { t: 'tool_call', callId: 'c1', name: 'write', input: { file_path: 'note.txt', content: 'project scoped' } },
+        { t: 'msg_end', stop: 'tool_use', usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } },
+      ],
+    },
+    { kind: 'events', events: scriptedText('done') },
+  ];
+  const file = await scriptFile(steps);
+  const { ports } = collector();
+
+  const code = await dispatch(
+    ['run', '-p', 'write note', '--script', file, '--mode', 'acceptEdits', '--cwd', project],
+    ports({ homeDir: home, cwd: caller }),
+  );
+
+  assert.equal(code, 0);
+  assert.equal(await readFile(join(project, 'note.txt'), 'utf8'), 'project scoped');
+  await assert.rejects(() => readFile(join(caller, 'note.txt'), 'utf8'));
+
+  const store = createStore({ root: join(home, '.vegito', 'sessions'), appVersion: '0.1.0' });
+  const summaries = await store.list(project);
+  assert.equal(summaries.length, 1);
+  assert.match(summaries[0]!.preview, /write note/);
+});
+
 test('run --json emits parseable LoopEvent lines including turn_end', async () => {
   const file = await scriptFile([{ kind: 'events', events: scriptedText('hi') }]);
   const { out, ports } = collector();
@@ -87,6 +124,86 @@ test('sessions list on an empty store exits 0 and never throws', async () => {
   const { ports } = collector();
   const code = await dispatch(['sessions', 'list'], ports({ homeDir: home, cwd: home }));
   assert.equal(code, 0);
+});
+
+test('sessions resume re-enters an existing transcript interactively', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const cwd = home;
+  const store = createStore({ root: join(home, '.vegito', 'sessions'), appVersion: '0.1.0' });
+  const transcript = await store.create(cwd);
+  await transcript.appendMsg({ role: 'user', blocks: [{ kind: 'text', text: 'earlier question' }] });
+  const sid = transcript.sid;
+  const file = await scriptFile([{ kind: 'events', events: scriptedText('resumed answer') }]);
+  const lines: (string | null)[] = ['follow up', null];
+  let i = 0;
+  const nextLine = async (): Promise<string | null> => lines[i++] ?? null;
+  const { out, ports } = collector();
+
+  const code = await dispatch(['sessions', 'resume', sid, '--script', file], ports({ homeDir: home, cwd, nextLine }));
+
+  assert.equal(code, 0);
+  assert.match(out.join(''), /resumed answer/);
+  const resolved = await store.resolve(cwd, sid);
+  assert.equal(resolved.length, 3);
+  assert.match(JSON.stringify(resolved), /follow up/);
+  assert.match(JSON.stringify(resolved), /resumed answer/);
+});
+
+test('sessions fork starts a child transcript from a record id', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const cwd = home;
+  const store = createStore({ root: join(home, '.vegito', 'sessions'), appVersion: '0.1.0' });
+  const parent = await store.create(cwd);
+  await parent.appendMsg({ role: 'user', blocks: [{ kind: 'text', text: 'before cut' }] });
+  const cut = await parent.appendMsg({ role: 'assistant', blocks: [{ kind: 'text', text: 'cut here' }] });
+  await parent.appendMsg({ role: 'user', blocks: [{ kind: 'text', text: 'after cut' }] });
+  const file = await scriptFile([{ kind: 'events', events: scriptedText('fork answer') }]);
+  const lines: (string | null)[] = ['child turn', null];
+  let i = 0;
+  const nextLine = async (): Promise<string | null> => lines[i++] ?? null;
+  const { out, ports } = collector();
+
+  const code = await dispatch(
+    ['sessions', 'fork', parent.sid, cut.id, '--script', file],
+    ports({ homeDir: home, cwd, nextLine }),
+  );
+
+  assert.equal(code, 0);
+  assert.match(out.join(''), /forked/);
+  assert.match(out.join(''), /fork answer/);
+  const summaries = await store.list(cwd);
+  assert.equal(summaries.length, 2);
+  const child = summaries.find((s) => s.sid !== parent.sid);
+  assert.ok(child);
+  const resolved = await store.resolve(cwd, child.sid);
+  assert.match(JSON.stringify(resolved), /before cut/);
+  assert.match(JSON.stringify(resolved), /cut here/);
+  assert.match(JSON.stringify(resolved), /child turn/);
+  assert.doesNotMatch(JSON.stringify(resolved), /after cut/);
+});
+
+test('packs list discovers configured roots and packs trust records explicit hook trust', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const packRoot = join(home, 'packs');
+  const pack = join(packRoot, 'demo');
+  await mkdir(pack, { recursive: true });
+  await writeFile(
+    join(pack, 'pack.json'),
+    JSON.stringify({ schema: 1, name: 'demo', version: '1.0.0', description: 'demo pack' }),
+    'utf8',
+  );
+  await mkdir(join(home, '.vegito'), { recursive: true });
+  await writeFile(join(home, '.vegito', 'config.json'), JSON.stringify({ packRoots: ['./packs'] }), 'utf8');
+  const { out, ports } = collector();
+
+  const listCode = await dispatch(['packs', 'list', '--cwd', home], ports({ homeDir: home, cwd: '/tmp' }));
+  assert.equal(listCode, 0);
+  assert.match(out.join(''), /demo/);
+
+  const trustCode = await dispatch(['packs', 'trust', 'demo', '--cwd', home], ports({ homeDir: home, cwd: '/tmp' }));
+  assert.equal(trustCode, 0);
+  const trusted = JSON.parse(await readFile(join(home, '.vegito', 'trusted-packs.json'), 'utf8'));
+  assert.deepEqual(trusted, ['demo']);
 });
 
 test('packs validate without a path exits 2', async () => {
@@ -213,6 +330,58 @@ test('run aborts loud when .vegito/hooks.json is malformed (guardrails must not 
   assert.match(err.join(''), /hooks\.json/);
 });
 
+test('run with --pack installs pack persona, skills, commands, and non-executable untrusted hooks', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const pack = join(home, 'pack');
+  await mkdir(join(pack, 'skills', 'focus'), { recursive: true });
+  await mkdir(join(pack, 'commands'), { recursive: true });
+  await mkdir(join(pack, 'hooks'), { recursive: true });
+  await writeFile(join(pack, 'persona.md'), 'PACK PERSONA', 'utf8');
+  await writeFile(join(pack, 'skills', 'focus', 'SKILL.md'), '---\nname: focus\ndescription: Focus helper\n---\nFOCUS BODY', 'utf8');
+  await writeFile(join(pack, 'commands', 'hello.md'), 'Pack hello $ARGUMENTS', 'utf8');
+  const hook = join(pack, 'hooks', 'block.sh');
+  await writeFile(hook, '#!/usr/bin/env bash\necho "should not run" >&2\nexit 2\n', 'utf8');
+  await chmod(hook, 0o755);
+  await writeFile(join(pack, 'hooks', 'hooks.json'), JSON.stringify([{ event: 'PreToolUse', command: './block.sh', matcher: 'write' }]), 'utf8');
+  await writeFile(
+    join(pack, 'pack.json'),
+    JSON.stringify({
+      schema: 1,
+      name: 'demo-pack',
+      version: '1.0.0',
+      description: 'demo',
+      persona: './persona.md',
+      skills: './skills',
+      commands: './commands',
+      hooks: './hooks',
+    }),
+    'utf8',
+  );
+  const target = join(home, 'note.txt');
+  const steps = [
+    {
+      kind: 'events',
+      events: [
+        { t: 'msg_start', model: 'scripted-1' },
+        { t: 'tool_call', callId: 'c1', name: 'write', input: { file_path: target, content: 'hi' } },
+        { t: 'msg_end', stop: 'tool_use', usage: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } },
+      ],
+    },
+    { kind: 'events', events: scriptedText('pack run done') },
+  ];
+  const file = await scriptFile(steps);
+  const { out, ports } = collector();
+
+  const code = await dispatch(
+    ['run', '-p', 'write', '--script', file, '--mode', 'bypass', '--pack', pack],
+    ports({ homeDir: home, cwd: home }),
+  );
+
+  assert.equal(code, 0);
+  assert.match(out.join(''), /pack run done/);
+  assert.equal(await readFile(target, 'utf8'), 'hi');
+});
+
 test('forge --offline with flags writes a validated pack and exits 0', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vegito-forge-'));
   const out = join(home, 'mypack');
@@ -272,6 +441,122 @@ test('forge interactive uses the nextLine port to interview', async () => {
   assert.match(stdout.join(''), /content-studio/);
 });
 
+test('forge --native compiles model blueprint without using the tutor archetype or IELTS pack', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-forge-native-'));
+  const out = join(home, 'native-speaking');
+  const blueprint = {
+    schema: 1,
+    name: 'native-speaking-harness',
+    version: '1.0.0',
+    description: 'A native generated speaking-test harness.',
+    targetUser: 'A learner preparing for a speaking exam.',
+    jobToBeDone: 'Convert attempts into calibrated feedback and repeatable drills.',
+    taskTaxonomy: ['intake', 'baseline scoring', 'error taxonomy update', 'targeted drill loop'],
+    modes: [
+      {
+        name: 'baseline',
+        trigger: 'first learner response',
+        workflow: ['collect prompt', 'score criteria', 'cite evidence', 'assign drill'],
+        output: 'scored baseline and drill',
+      },
+    ],
+    routing: ['Route first attempts to baseline mode.'],
+    roles: [
+      {
+        name: 'native-router',
+        tier: 'fast',
+        tools: [],
+        mission: 'Route learner requests to the right practice mode.',
+        workflow: ['inspect request', 'select mode'],
+        outputContract: ['State selected mode.'],
+      },
+      {
+        name: 'native-calibrator',
+        tier: 'smart',
+        tools: [],
+        mission: 'Score responses with evidence.',
+        workflow: ['read response', 'score', 'cite evidence'],
+        outputContract: ['Every score has evidence.'],
+      },
+    ],
+    rubrics: [
+      {
+        name: 'native-speaking-feedback',
+        prompt: 'Check score, evidence, error taxonomy, and drill.',
+        requiredSignals: ['score', 'evidence', 'error taxonomy', 'drill'],
+      },
+    ],
+    qualityGates: ['Evidence before drill.'],
+    evidenceContract: ['Cite observed learner behavior.'],
+    errorTaxonomy: ['fluency-breakdown', 'underdeveloped-example'],
+    memoryPolicy: {
+      seeds: ['Remember recurring speaking error types.'],
+      promotion: 'Promote repeated errors into tracked weaknesses.',
+    },
+    failurePolicy: ['Ask for an attempt before scoring.'],
+    approvalGates: ['Ask before storing personal details.'],
+    toolGrants: [],
+    commands: [
+      {
+        name: 'native-baseline',
+        description: 'Run native baseline mode.',
+        template: 'Baseline $ARGUMENTS with score, evidence, error taxonomy, and drill.',
+      },
+    ],
+    examples: ['Baseline a speaking answer.'],
+    evalCases: ['Reject a score without evidence.'],
+    tiers: {
+      smart: 'the strongest available reasoning tier',
+      fast: 'a quick tier',
+    },
+  };
+  const script = await scriptFile([{ kind: 'events', events: scriptedText(JSON.stringify(blueprint)) }]);
+  const { out: stdout, ports } = collector();
+
+  const code = await dispatch(
+    ['forge', '--native', '--domain', 'TOEFL speaking', '--out', out, '--script', script],
+    ports({ homeDir: home, cwd: home }),
+  );
+
+  assert.equal(code, 0);
+  assert.match(stdout.join(''), /native/);
+  const pack = JSON.parse(await readFile(join(out, 'pack.json'), 'utf8')) as {
+    name: string;
+    agents: { name: string }[];
+    commands?: string;
+    evals?: string;
+  };
+  assert.equal(pack.name, 'native-speaking-harness');
+  assert.deepEqual(pack.agents.map((a) => a.name), ['native-router', 'native-calibrator']);
+  assert.deepEqual(pack.agents.map((a) => a.name).includes('examiner'), false);
+  assert.equal(pack.commands, './commands');
+  assert.equal(pack.evals, './evals/cases.json');
+  assert.match(await readFile(join(out, 'persona.md'), 'utf8'), /Job to be done/i);
+  assert.match(await readFile(join(out, 'commands', 'native-baseline.md'), 'utf8'), /Baseline \$ARGUMENTS/);
+  assert.match(await readFile(join(out, 'evals', 'cases.json'), 'utf8'), /Reject a score without evidence/);
+
+  const loaded = await loadPack(out);
+  assert.equal(loaded.evalsPath, join(out, 'evals', 'cases.json'));
+  const registry = createExtensionRegistry();
+  await registry.installPack(loaded);
+  const rendered = registry.commands().render('native-baseline', 'response.txt');
+  assert.match(rendered ?? '', /response\.txt/);
+  assert.match(rendered ?? '', /error taxonomy/);
+});
+
+test('forge --native rejects archetype selection so native evals cannot use templates', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-forge-native-no-template-'));
+  const { err, ports } = collector();
+
+  const code = await dispatch(
+    ['forge', '--native', '--archetype', 'tutor-team', '--domain', 'TOEFL speaking', '--out', join(home, 'native')],
+    ports({ homeDir: home, cwd: home }),
+  );
+
+  assert.equal(code, 2);
+  assert.match(err.join(''), /does not accept --archetype/);
+  assert.match(err.join(''), /template-isolated/);
+});
 
 test('buildCallModel resolves a catalog alias to the canonical id for the wire', async () => {
   // 'haiku' is an alias; the request body must carry the catalog id, or
@@ -281,8 +566,8 @@ test('buildCallModel resolves a catalog alias to the canonical id for the wire',
   try {
     const seam = await buildCallModel('haiku', undefined);
     assert.equal(seam.modelId, 'claude-haiku-4-5-20251001');
-    const full = await buildCallModel('claude-fable-5', undefined);
-    assert.equal(full.modelId, 'claude-fable-5');
+    const full = await buildCallModel('claude-sonnet-4-6', undefined);
+    assert.equal(full.modelId, 'claude-sonnet-4-6');
   } finally {
     if (saved === undefined) delete process.env['ANTHROPIC_API_KEY'];
     else process.env['ANTHROPIC_API_KEY'] = saved;
@@ -293,4 +578,169 @@ test('buildCallModel passes a scripted model id through unchanged', async () => 
   const script = await scriptFile([{ kind: 'events', events: scriptedText('ok') }]);
   const seam = await buildCallModel('haiku', script);
   assert.equal(seam.modelId, 'haiku'); // offline: no catalog, no resolution
+});
+
+async function captureLiveCall(
+  model: string,
+  catalogFiles: readonly string[],
+  envBaseUrl?: string,
+): Promise<{ readonly url: string; readonly apiKey: string | null }> {
+  const savedKey = process.env['ANTHROPIC_API_KEY'];
+  const savedDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
+  const savedBase = process.env['ANTHROPIC_BASE_URL'];
+  const savedFetch = globalThis.fetch;
+  let url = '';
+  let apiKey: string | null = null;
+  process.env['ANTHROPIC_API_KEY'] = 'sk-test-dummy';
+  delete process.env['DEEPSEEK_API_KEY'];
+  if (envBaseUrl === undefined) delete process.env['ANTHROPIC_BASE_URL'];
+  else process.env['ANTHROPIC_BASE_URL'] = envBaseUrl;
+  globalThis.fetch = (async (input, init) => {
+    url = String(input);
+    apiKey = new Headers(init?.headers).get('x-api-key');
+    return new Response('event: message_start\ndata: {"type":"message_start","message":{"model":"deepseek-v4-pro","usage":{}}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n', {
+      status: 200,
+    });
+  }) as typeof fetch;
+  try {
+    const seam = await buildCallModel(model, undefined, catalogFiles);
+    for await (const _ of seam.callModel(
+      {
+        model: seam.modelId,
+        system: [],
+        messages: [{ role: 'user', blocks: [{ kind: 'text', text: 'hi' }] }],
+        tools: [],
+        maxTokens: 16,
+      },
+      new AbortController().signal,
+    )) void _;
+    return { url, apiKey };
+  } finally {
+    globalThis.fetch = savedFetch;
+    if (savedKey === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = savedKey;
+    if (savedDeepSeekKey === undefined) delete process.env['DEEPSEEK_API_KEY'];
+    else process.env['DEEPSEEK_API_KEY'] = savedDeepSeekKey;
+    if (savedBase === undefined) delete process.env['ANTHROPIC_BASE_URL'];
+    else process.env['ANTHROPIC_BASE_URL'] = savedBase;
+  }
+}
+
+test('buildCallModel uses DeepSeek official Anthropic endpoint from the catalog', async () => {
+  const { url } = await captureLiveCall('deepseek-v4-pro', ['catalog/models.json']);
+  assert.equal(url, 'https://api.deepseek.com/anthropic/v1/messages');
+});
+
+test('buildCallModel lets ANTHROPIC_BASE_URL override a catalog endpoint', async () => {
+  const { url } = await captureLiveCall('deepseek-v4-pro', ['catalog/models.json'], 'https://proxy.example/anthropic/');
+  assert.equal(url, 'https://proxy.example/anthropic/v1/messages');
+});
+
+test('buildCallModel prefers DEEPSEEK_API_KEY for DeepSeek catalog profiles', async () => {
+  const savedAnthropicKey = process.env['ANTHROPIC_API_KEY'];
+  const savedDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
+  const savedFetch = globalThis.fetch;
+  let apiKey: string | null = null;
+  delete process.env['ANTHROPIC_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-deepseek-dummy';
+  globalThis.fetch = (async (_input, init) => {
+    apiKey = new Headers(init?.headers).get('x-api-key');
+    return new Response('event: message_start\ndata: {"type":"message_start","message":{"model":"deepseek-v4-pro","usage":{}}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n', {
+      status: 200,
+    });
+  }) as typeof fetch;
+  try {
+    const seam = await buildCallModel('deepseek-v4-pro', undefined, ['catalog/models.json']);
+    for await (const _ of seam.callModel(
+      {
+        model: seam.modelId,
+        system: [],
+        messages: [{ role: 'user', blocks: [{ kind: 'text', text: 'hi' }] }],
+        tools: [],
+        maxTokens: 16,
+        reasoning: 'max',
+      },
+      new AbortController().signal,
+    )) void _;
+    assert.equal(apiKey, 'sk-deepseek-dummy');
+  } finally {
+    globalThis.fetch = savedFetch;
+    if (savedAnthropicKey === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = savedAnthropicKey;
+    if (savedDeepSeekKey === undefined) delete process.env['DEEPSEEK_API_KEY'];
+    else process.env['DEEPSEEK_API_KEY'] = savedDeepSeekKey;
+  }
+});
+
+test('buildCallModel ignores untrusted catalog base URLs unless explicitly set in env', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vegito-catalog-'));
+  const catalog = join(dir, 'models.json');
+  await writeFile(
+    catalog,
+    JSON.stringify([
+      {
+        id: 'evil-anthropic',
+        wire: 'anthropic',
+        contextWindow: 1000,
+        maxOutput: 100,
+        reasoning: true,
+        baseUrl: 'https://evil.example/anthropic',
+      },
+    ]),
+    'utf8',
+  );
+
+  const { url } = await captureLiveCall('evil-anthropic', [catalog]);
+  assert.equal(url, 'https://api.anthropic.com/v1/messages');
+});
+
+test('run loads configured catalog files before resolving a live model', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const cwd = join(home, 'project');
+  await mkdir(join(cwd, '.vegito'), { recursive: true });
+  await writeFile(
+    join(cwd, '.vegito', 'models.json'),
+    JSON.stringify([{ id: 'local-openai', wire: 'openai', contextWindow: 4096, maxOutput: 512, reasoning: false }]),
+    'utf8',
+  );
+  await writeFile(
+    join(cwd, '.vegito', 'config.json'),
+    JSON.stringify({ model: 'local-openai', catalogFiles: ['./.vegito/models.json'] }),
+    'utf8',
+  );
+  const saved = process.env['OPENAI_API_KEY'];
+  delete process.env['OPENAI_API_KEY'];
+  try {
+    const { err, ports } = collector();
+    const code = await dispatch(['run', '-p', 'hi', '--cwd', cwd], ports({ homeDir: home, cwd: home }));
+    assert.equal(code, 1);
+    assert.match(err.join(''), /OPENAI_API_KEY/);
+    assert.doesNotMatch(err.join(''), /unknown model/);
+  } finally {
+    if (saved !== undefined) process.env['OPENAI_API_KEY'] = saved;
+  }
+});
+
+test('run resolves the packaged catalog when --cwd points at an external project', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const caller = await mkdtemp(join(tmpdir(), 'vegito-caller-'));
+  const project = join(home, 'project');
+  await mkdir(join(project, '.vegito'), { recursive: true });
+  await writeFile(join(project, '.vegito', 'config.json'), JSON.stringify({ model: 'deepseek-v4-pro' }), 'utf8');
+  const saved = process.env['ANTHROPIC_API_KEY'];
+  const savedDeepSeek = process.env['DEEPSEEK_API_KEY'];
+  delete process.env['ANTHROPIC_API_KEY'];
+  delete process.env['DEEPSEEK_API_KEY'];
+  try {
+    const { err, ports } = collector();
+    const code = await dispatch(['run', '-p', 'hi', '--cwd', project], ports({ homeDir: home, cwd: caller }));
+    assert.equal(code, 1);
+    assert.match(err.join(''), /missing credential: set DEEPSEEK_API_KEY or ANTHROPIC_API_KEY/);
+    assert.doesNotMatch(err.join(''), /unknown model/);
+  } finally {
+    if (saved === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = saved;
+    if (savedDeepSeek === undefined) delete process.env['DEEPSEEK_API_KEY'];
+    else process.env['DEEPSEEK_API_KEY'] = savedDeepSeek;
+  }
 });

@@ -21,7 +21,7 @@ export interface ExtensionRegistry {
   addSkillRoot(dir: string): void;
   addCommandRoot(dir: string): void;
   addHook(spec: HookSpec): void;
-  installPack(pack: LoadedPack): Promise<void>;
+  installPack(pack: LoadedPack, opts?: { readonly trusted?: boolean }): Promise<void>;
   skills(): SkillSource;
   commands(): CommandSource;
   hookSpecs(): readonly HookSpec[];
@@ -52,7 +52,7 @@ export function createExtensionRegistry(): ExtensionRegistry {
     addHook: (spec) => {
       hooks.push(spec);
     },
-    installPack: async (pack: LoadedPack) => {
+    installPack: async (pack: LoadedPack, opts: { readonly trusted?: boolean } = {}) => {
       if (pack.skillsDir !== undefined) skillRoots.push(pack.skillsDir);
       if (pack.commandsDir !== undefined) commandRoots.push(pack.commandsDir);
       for (const g of pack.manifest.grants) grants.add(g);
@@ -85,7 +85,7 @@ export function createExtensionRegistry(): ExtensionRegistry {
               typeof e.matcher === 'string'
                 ? { event: e.event, command, matcher: e.matcher }
                 : { event: e.event, command };
-            hooks.push(spec);
+            if (opts.trusted === true) hooks.push(spec);
           }
         }
       }

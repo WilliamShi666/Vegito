@@ -50,6 +50,8 @@ export interface ToolDef {
   inputSchema: unknown; // JSON Schema, passed through to the wire verbatim
 }
 
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
+
 // What the kernel asks of any provider — no vendor names anywhere. `system`
 // is an ordered list of tiers; the stable prefix must stay byte-identical
 // across calls (D4), so wires may mark the tail cacheable but never reorder.
@@ -59,7 +61,7 @@ export interface NeutralRequest {
   messages: readonly NeutralMsg[];
   tools: readonly ToolDef[];
   maxTokens: number;
-  reasoning?: 'off' | 'low' | 'medium' | 'high';
+  reasoning?: ReasoningEffort;
 }
 
 export interface WireProtocol {

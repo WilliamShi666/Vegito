@@ -130,6 +130,20 @@ describe('buildAnthropicBody', () => {
     }) as { messages: { content: Record<string, unknown>[] }[] };
     assert.deepEqual(body.messages[0]?.content[0], { type: 'thinking', thinking: 't' });
   });
+
+  test('max reasoning enables the largest thinking budget', () => {
+    const body = buildAnthropicBody({
+      model: 'deepseek-v4-pro',
+      system: [],
+      messages: [{ role: 'user', blocks: [{ kind: 'text', text: 'think hard' }] }],
+      tools: [],
+      maxTokens: 4096,
+      reasoning: 'max',
+    });
+
+    assert.equal(body['max_tokens'], 66560);
+    assert.deepEqual(body['thinking'], { type: 'enabled', budget_tokens: 65536 });
+  });
 });
 
 function pushAll(tr: AnthropicEventTranslator, frames: readonly { event: string; data: unknown }[]): ProviderEvent[] {

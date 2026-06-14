@@ -74,7 +74,7 @@ function rmRootHit(cmd: string): boolean {
 
 const NET_TOOL = /(^|[\s;|&])(?:curl|wget|nc|ncat|netcat|scp|sftp|rsync|ftp)\b/;
 const CRED_PATH =
-  /(?:\.ssh\/id_[A-Za-z0-9_.]+|\.ssh\/authorized_keys|\.aws\/credentials|\/etc\/shadow|\/etc\/sudoers|\.gnupg\/|\.netrc\b|\.docker\/config\.json)/;
+  /(?:\.ssh\/id_[A-Za-z0-9_.]+|\.ssh\/authorized_keys|\.aws\/credentials|\/etc\/shadow|\/etc\/sudoers(?:\.d\/.*)?|\.gnupg\/|\.netrc\b|\.docker\/config\.json)/;
 
 interface CommandFloor {
   readonly name: string;
@@ -125,9 +125,11 @@ const COMMAND_FLOOR: readonly CommandFloor[] = [
   },
 ];
 
-// Files that define system identity/privilege: writes are floor for EVERY
-// tool's write-action key, not just bash.
+// Files that define identity, privilege, or provider credentials. Writes are
+// floor for every write-action key; reads are floor for credential material.
 const SYSTEM_CRED_FILE = /(?:^\/etc\/(?:passwd|shadow|sudoers(?:\.d\/.*)?)$|(?:^|\/)\.ssh\/authorized_keys$)/;
+const READ_CRED_PATH =
+  /(?:^\/etc\/(?:shadow|sudoers(?:\.d\/.*)?)$|(?:^|\/)\.ssh\/id_[A-Za-z0-9_.]+$|(?:^|\/)\.aws\/credentials$|(?:^|\/)\.netrc$|(?:^|\/)\.docker\/config\.json$|(?:^|\/)\.gnupg(?:\/|$))/;
 
 /**
  * The hardline floor: returns a hit for catastrophic keys that nothing may
@@ -145,6 +147,12 @@ export function floorCheck(key: PermKey): FloorHit | undefined {
     return {
       name: 'system-credential-file',
       reason: 'writing a system credential file (passwd/shadow/sudoers/authorized_keys) changes who can log in',
+    };
+  }
+  if (key.action === 'read' && READ_CRED_PATH.test(key.target)) {
+    return {
+      name: 'credential-read',
+      reason: 'reading credential material is never auto-authorized',
     };
   }
   return undefined;

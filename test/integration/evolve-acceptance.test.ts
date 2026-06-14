@@ -15,6 +15,8 @@ import { dispatch, type DispatchPorts } from '../../src/ui/cli/dispatch.ts';
 import { createStore } from '../../src/sessions/store.ts';
 import { scriptedText } from '../../src/providers/wire/scripted.ts';
 import type { ScriptedStep } from '../../src/providers/wire/scripted.ts';
+import { loadPack } from '../../src/extend/packs.ts';
+import { buildSystemTiers } from '../../src/ui/cli/runtime-support.ts';
 
 const APP_VERSION = '0.1.0';
 
@@ -72,20 +74,34 @@ test('forge → seed session → evolve (gated apply) bumps version with provena
   const steps: readonly ScriptedStep[] = [{ kind: 'events', events: scriptedText(review) }];
   await writeFile(scriptFile, JSON.stringify(steps), 'utf8');
 
-  // 4. Evolve in acceptEdits mode (in-workspace writes auto-allow through the gate).
-  const evolveCode = await dispatch(
+  // 4. Default evolve is review-only: it reports observations/proposals but
+  //    leaves the pack byte-identical until --apply is explicit.
+  const reviewOut: string[] = [];
+  const reviewCode = await dispatch(
     ['evolve', out, '--session', sid, '--mode', 'acceptEdits', '--script', scriptFile],
+    ports({ homeDir: home, cwd, write: (s) => reviewOut.push(s) }),
+  );
+  assert.equal(reviewCode, 0, 'review-only evolve should exit 0');
+  assert.match(reviewOut.join(''), /review-only/i);
+  assert.deepEqual(await snapshot(out), before, 'default evolve must not mutate the pack');
+
+  // 5. Explicit --apply performs the gated mutation.
+  const evolveCode = await dispatch(
+    ['evolve', out, '--session', sid, '--mode', 'acceptEdits', '--script', scriptFile, '--apply'],
     ports({ homeDir: home, cwd }),
   );
   assert.equal(evolveCode, 0, 'evolve should exit 0');
 
-  // 5. The pack version bumped and the constraint landed in the persona.
+  // 6. The pack version bumped and the constraint landed in the persona.
   const manifest = JSON.parse(await readFile(join(out, 'pack.json'), 'utf8'));
   assert.equal(manifest.version, '1.0.1', 'version should bump 1.0.0 → 1.0.1');
   const persona = await readFile(join(out, 'persona.md'), 'utf8');
   assert.match(persona, /Lead with the band score, not an apology\./);
+  const activePack = await loadPack(out);
+  const tiers = await buildSystemTiers(cwd, home, [activePack]);
+  assert.match(tiers.join('\n'), /Lead with the band score, not an apology\./, 'evolved persona must activate in runtime system prompt');
 
-  // 6. A provenance record was written citing the session + observation.
+  // 7. A provenance record was written citing the session + observation.
   const prov = (await readFile(join(out, '.evolve/provenance.jsonl'), 'utf8')).trim().split('\n');
   assert.equal(prov.length, 1);
   const rec = JSON.parse(prov[0]!);
@@ -94,7 +110,7 @@ test('forge → seed session → evolve (gated apply) bumps version with provena
   assert.deepEqual(rec.sids, [sid]);
   assert.ok(rec.observations.includes(`${sid}#0`), 'provenance cites the observation id');
 
-  // 7. Revert restores the pack byte-identically.
+  // 8. Revert restores the pack byte-identically.
   const revertCode = await dispatch(['evolve', 'revert', out], ports({ homeDir: home, cwd }));
   assert.equal(revertCode, 0);
   const after = await snapshot(out);

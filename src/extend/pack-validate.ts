@@ -83,6 +83,7 @@ export async function validatePack(root: string): Promise<ValidationResult> {
   const filePaths: string[] = [];
   if (manifest.persona !== undefined) filePaths.push(manifest.persona);
   if (manifest.onboarding !== undefined) filePaths.push(manifest.onboarding);
+  if (manifest.evals !== undefined) filePaths.push(manifest.evals);
   for (const a of manifest.agents) filePaths.push(a.prompt);
   for (const r of manifest.rubrics) {
     if (r.prompt !== '') filePaths.push(r.prompt);

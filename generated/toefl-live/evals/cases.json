@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "eval-1",
+      "prompt": "Evaluate a diagnostic response: a transcript with moderate grammar errors and hesitant delivery. Expect scores around 2-3, evidence quotes pointing to specific grammar mistakes.",
+      "requiredSignals": [
+        "delivery_score",
+        "language_use_score",
+        "topic_development_score",
+        "overall_avg_score",
+        "evidence_quotes"
+      ]
+    },
+    {
+      "name": "eval-2",
+      "prompt": "Test drill mode for pronunciation of 'th' sound. Provide a response with mispronunciation. DrillMaster should flag the error and suggest a correction.",
+      "requiredSignals": [
+        "delivery_score",
+        "language_use_score",
+        "topic_development_score",
+        "overall_avg_score",
+        "evidence_quotes"
+      ]
+    },
+    {
+      "name": "eval-3",
+      "prompt": "Test full-test simulation: run through all 4 tasks with mock responses, verify timing and scoring conversion, and check that memory stores the complete session.",
+      "requiredSignals": [
+        "delivery_score",
+        "language_use_score",
+        "topic_development_score",
+        "overall_avg_score",
+        "evidence_quotes"
+      ]
+    },
+    {
+      "name": "eval-4",
+      "prompt": "Test memory recall after 5 simulated sessions: MemoryKeeper should produce a progress summary showing improvement trend and indicate the most recurring weakness.",
+      "requiredSignals": [
+        "delivery_score",
+        "language_use_score",
+        "topic_development_score",
+        "overall_avg_score",
+        "evidence_quotes"
+      ]
+    },
+    {
+      "name": "eval-5",
+      "prompt": "Test off-topic response handling: user says something unrelated to the prompt, system should detect and prompt to refocus.",
+      "requiredSignals": [
+        "delivery_score",
+        "language_use_score",
+        "topic_development_score",
+        "overall_avg_score",
+        "evidence_quotes"
+      ]
+    }
+  ]
+}

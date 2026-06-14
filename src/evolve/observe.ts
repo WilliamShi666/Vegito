@@ -1,5 +1,5 @@
 import type { NeutralMsg } from '../providers/types.ts';
-import { isObservationKind, type Observation, type RawObservation } from './types.ts';
+import { validateRawObservation, type Observation, type RawObservation } from './types.ts';
 
 // observe (DESIGN §8): a forked-child session reviews a transcript and emits
 // typed Observations. The review itself is a model call (or a scripted fixture
@@ -41,8 +41,9 @@ export async function observe(
     const raw = raws[i]!;
     // Defensive: a model can hand back a malformed shape. Drop anything whose
     // kind we don't recognize rather than letting it poison downstream stages.
-    if (!isObservationKind(raw.kind)) continue;
-    out.push({ ...raw, id: `${sid}#${i}`, sid });
+    const validated = validateRawObservation(raw);
+    if (!validated.ok) continue;
+    out.push({ ...validated.value, id: `${sid}#${i}`, sid });
   }
   return out;
 }

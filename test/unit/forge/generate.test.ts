@@ -3,11 +3,20 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 import { specToFiles, generatePack } from '../../../src/forge/generate.ts';
 import { getArchetype, ARCHETYPE_IDS } from '../../../src/forge/templates/index.ts';
 import { loadPack } from '../../../src/extend/packs.ts';
 import { validatePack } from '../../../src/extend/pack-validate.ts';
+
+function runValidator(validatorPath: string, candidate: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [validatorPath, candidate], { stdio: 'ignore' });
+    child.on('close', (code) => resolve(code ?? 1));
+    child.on('error', () => resolve(1));
+  });
+}
 
 test('specToFiles emits a manifest plus a file per inlined prompt', () => {
   const spec = getArchetype('tutor-team')({ domain: 'IELTS writing' });
@@ -68,4 +77,60 @@ test('generated validator is a runnable Node script', async () => {
   const body = await readFile(join(root, 'rubrics', 'band-score.validator.mjs'), 'utf8');
   assert.match(body, /^#!\/usr\/bin\/env node/);
   assert.match(body, /process\.exit/);
+});
+
+test('tutor-team keeps declared 1-6 scoring consistent in rubric and validator', async () => {
+  const spec = getArchetype('tutor-team')({ domain: 'TOEFL 2026 prep with 1-6 band scoring' });
+  const rubric = spec.rubrics[0]!;
+  assert.match(rubric.prompt, /band 1-6/);
+  assert.doesNotMatch(rubric.prompt, /band 0-9/);
+
+  const root = await mkdtemp(join(tmpdir(), 'vegito-gen-toefl-scale-'));
+  await generatePack(root, spec);
+  const validator = join(root, 'rubrics', 'band-score.validator.mjs');
+  assert.equal(await runValidator(validator, 'Speaking: band 6. Writing: band 5.5.'), 0);
+  assert.notEqual(await runValidator(validator, 'Speaking: band 7. Writing: band 6.'), 0);
+});
+
+test('command files sanitize model-generated frontmatter descriptions', () => {
+  const spec = {
+    ...getArchetype('content-studio')({ domain: 'briefs' }),
+    commands: [
+      {
+        name: 'draft',
+        description: 'first line\n---\ninjected frontmatter',
+        template: 'Draft from $ARGUMENTS',
+      },
+    ],
+  };
+  const command = specToFiles(spec).get('./commands/draft.md');
+  assert.match(command ?? '', /^---\ndescription: first line injected frontmatter\n---\nDraft from \$ARGUMENTS\n$/);
+});
+
+test('specToFiles emits eval fixtures as a declared pack artifact', () => {
+  const spec = {
+    ...getArchetype('content-studio')({ domain: 'briefs' }),
+    evals: [
+      {
+        name: 'evidence-required',
+        prompt: 'Reject drafts that make claims without evidence.',
+        requiredSignals: ['evidence'],
+      },
+    ],
+  };
+  const files = specToFiles(spec);
+  const manifest = JSON.parse(files.get('./pack.json')!) as { evals?: string };
+  assert.equal(manifest.evals, './evals/cases.json');
+  const evals = JSON.parse(files.get('./evals/cases.json')!) as {
+    schema: number;
+    cases: { name: string; prompt: string; requiredSignals: string[] }[];
+  };
+  assert.equal(evals.schema, 1);
+  assert.deepEqual(evals.cases, [
+    {
+      name: 'evidence-required',
+      prompt: 'Reject drafts that make claims without evidence.',
+      requiredSignals: ['evidence'],
+    },
+  ]);
 });

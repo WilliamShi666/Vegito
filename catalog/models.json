@@ -2,16 +2,6 @@
   "schema": 1,
   "comment": "Seed model catalog. Data, not code (SYNTHESIS A6/D8). Users override or extend via ~/.vegito/models.json. Pricing is per MTok and informational; null means unknown.",
   "models": {
-    "claude-fable-5": {
-      "wire": "anthropic",
-      "caching": "explicit",
-      "reasoning": true,
-      "toolCalls": true,
-      "usageReporting": true,
-      "contextWindow": 200000,
-      "maxOutput": 64000,
-      "pricing": null
-    },
     "claude-opus-4-8": {
       "wire": "anthropic",
       "caching": "explicit",
@@ -42,6 +32,30 @@
       "maxOutput": 32000,
       "pricing": { "in": 1, "out": 5, "cacheRead": 0.1, "cacheWrite": 1.25 }
     },
+    "deepseek-v4-pro": {
+      "wire": "anthropic",
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "caching": "explicit",
+      "reasoning": true,
+      "toolCalls": true,
+      "usageReporting": true,
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "aliases": ["deepseek-pro"],
+      "pricing": { "in": 0.435, "out": 0.87, "cacheRead": 0.003625, "cacheWrite": null }
+    },
+    "deepseek-v4-flash": {
+      "wire": "anthropic",
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "caching": "explicit",
+      "reasoning": true,
+      "toolCalls": true,
+      "usageReporting": true,
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "aliases": ["deepseek-flash"],
+      "pricing": { "in": 0.14, "out": 0.28, "cacheRead": 0.0028, "cacheWrite": null }
+    },
     "gpt-4o": {
       "wire": "openai",
       "caching": "implicit",
@@ -54,7 +68,7 @@
     }
   },
   "tiers": {
-    "smart": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"],
-    "worker": ["claude-haiku-4-5-20251001", "gpt-4o"]
+    "smart": ["claude-opus-4-8", "claude-sonnet-4-6", "deepseek-v4-pro"],
+    "worker": ["claude-haiku-4-5-20251001", "deepseek-v4-flash", "gpt-4o"]
   }
 }

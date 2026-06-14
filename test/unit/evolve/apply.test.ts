@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { applyProposals, revert, bumpVersion, type Gate } from '../../../src/evolve/apply.ts';
 import { generatePack } from '../../../src/forge/generate.ts';
@@ -78,6 +78,45 @@ test('a gated-deny proposal is skipped; the pack is untouched and version stays'
   assert.deepEqual(await snapshotDir(root), snap);
 });
 
+test('unsafe proposal targets are rejected inside applyProposals before any write', async () => {
+  const root = await makePack();
+  const outsideName = `${basename(root)}-outside.txt`;
+  const outside = join(root, '..', outsideName);
+  const snap = await snapshotDir(root);
+  const proposals: readonly Proposal[] = [
+    { kind: 'pack_edit', id: 'p', target: `../${outsideName}`, text: 'owned', provenance: ['s#0'] },
+  ];
+  const res = await applyProposals(root, proposals, allow, { sids: ['s'] });
+  assert.equal(res.applied.length, 0);
+  assert.ok(res.problems?.some((p) => /unsafe proposal target/i.test(p)));
+  await assert.rejects(() => readFile(outside, 'utf8'));
+  assert.deepEqual(await snapshotDir(root), snap);
+});
+
+test('proposal edits cannot target pack.json or provenance sidecar files', async () => {
+  const root = await makePack();
+  const proposals: readonly Proposal[] = [
+    { kind: 'pack_edit', id: 'manifest', target: 'pack.json', text: '{}', provenance: ['s#0'] },
+    { kind: 'pack_edit', id: 'prov', target: '.evolve/provenance.jsonl', text: '{}', provenance: ['s#0'] },
+  ];
+  const res = await applyProposals(root, proposals, allow, { sids: ['s'] });
+  assert.equal(res.applied.length, 0);
+  assert.ok(res.problems?.some((p) => /system-owned/i.test(p)));
+});
+
+test('pack.json and provenance writes are gated separately from proposal writes', async () => {
+  const root = await makePack();
+  const snap = await snapshotDir(root);
+  const gate: Gate = async (p) => (p.id.startsWith('system:') ? 'deny' : 'allow');
+  const proposals: readonly Proposal[] = [
+    { kind: 'pack_edit', id: 'p', target: 'persona.md', text: '\nA\n', provenance: ['s#0'] },
+  ];
+  const res = await applyProposals(root, proposals, gate, { sids: ['s'] });
+  assert.equal(res.applied.length, 0);
+  assert.ok(res.problems?.some((p) => /system write denied/i.test(p)));
+  assert.deepEqual(await snapshotDir(root), snap);
+});
+
 test('revert restores the pack byte-identically and pops the provenance record', async () => {
   const root = await makePack();
   const before = await snapshotDir(root);
@@ -116,6 +155,29 @@ test('provenance records carry version, prevVersion, proposal + observation ids 
   assert.deepEqual(rec.proposals, ['prop#0']);
   assert.deepEqual(rec.observations, ['s#0', 's#1']);
   assert.deepEqual(rec.sids, ['sess-1']);
+});
+
+test('applyProposals records an EvolutionRun with decisions, metrics, provenance, and activation evidence', async () => {
+  const root = await makePack();
+  const proposals: readonly Proposal[] = [
+    { kind: 'pack_edit', id: 'prop#0', target: 'persona.md', text: '\n## Learned constraints\n\n- Lead with outcomes.\n', provenance: ['s#0'] },
+    { kind: 'pack_edit', id: 'prop#1', target: 'rubrics/unknown.prompt.md', text: '\nBad\n', provenance: ['s#1'] },
+  ];
+  const res = await applyProposals(root, proposals, allow, { sids: ['sess-1'], datasets: ['holdout-mini'] });
+  assert.deepEqual([...res.applied], ['prop#0']);
+  assert.ok(res.problems?.some((p) => /not declared by pack manifest/i.test(p)));
+
+  const lines = (await readFile(join(root, '.evolve/runs.jsonl'), 'utf8')).trim().split('\n');
+  assert.equal(lines.length, 1);
+  const run = JSON.parse(lines[0]!);
+  assert.equal(run.schema, 1);
+  assert.equal(run.baselineVersion, '1.0.0');
+  assert.deepEqual(run.candidateIds, ['prop#0', 'prop#1']);
+  assert.deepEqual(run.datasetIds, ['sess-1', 'holdout-mini']);
+  assert.ok(run.metrics.some((m: { name: string }) => m.name === 'token_delta'));
+  assert.ok(run.decisions.some((d: { candidateId: string; verdict: string }) => d.candidateId === 'prop#0' && d.verdict === 'accepted'));
+  assert.ok(run.decisions.some((d: { candidateId: string; verdict: string }) => d.candidateId === 'prop#1' && d.verdict === 'rejected'));
+  assert.ok(run.activationEvidence.some((e: { candidateId: string; surface: string }) => e.candidateId === 'prop#0' && e.surface === 'system_prompt'));
 });
 
 test('a proposal that breaks validation is rolled back and reported, version intact', async () => {

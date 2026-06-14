@@ -89,7 +89,7 @@ describe('assembleLoopDeps', () => {
       workspace: '/work',
       mode: 'bypass',
       systemTiers: ['T1', 'T2'],
-      config: { model: 'm', maxIterations: 5, permissionMode: 'bypass', trace: false },
+      config: { model: 'm', maxIterations: 5, permissionMode: 'bypass', trace: false, reasoningEffort: 'max' },
       signal: new AbortController().signal,
     });
 
@@ -101,6 +101,7 @@ describe('assembleLoopDeps', () => {
     assert.equal(req.tools[0]!.name, 'peek');
     assert.equal(req.tools[0]!.description, 'peek at a file');
     assert.ok(req.maxTokens > 0);
+    assert.equal(req.reasoning, 'max');
   });
 
   test('builds a permission engine honoring the requested mode (plan blocks writes)', async () => {

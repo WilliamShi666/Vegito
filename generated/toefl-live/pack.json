@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "name": "toefl-ibt-speaking-coach",
+  "version": "1.0.0",
+  "description": "A domain harness for a TOEFL iBT speaking coach that diagnoses, drills, and provides evidence-based feedback with memory to help learners achieve a 24+ score.",
+  "persona": "./persona.md",
+  "grants": [],
+  "agents": [
+    {
+      "name": "Diagnostician",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/diagnostician.md"
+    },
+    {
+      "name": "DrillMaster",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/drillmaster.md"
+    },
+    {
+      "name": "FeedbackAnalyzer",
+      "model": "tier:smart",
+      "tools": [],
+      "prompt": "./agents/feedbackanalyzer.md"
+    },
+    {
+      "name": "MemoryKeeper",
+      "model": "tier:fast",
+      "tools": [],
+      "prompt": "./agents/memorykeeper.md"
+    }
+  ],
+  "rubrics": [
+    {
+      "name": "TOEFL-Speaking-Rubric",
+      "prompt": "./rubrics/toefl-speaking-rubric.prompt.md",
+      "validator": "./rubrics/toefl-speaking-rubric.validator.mjs"
+    }
+  ],
+  "modelTiers": {
+    "smart": "the strongest available reasoning tier for judgement-heavy work",
+    "fast": "a quick tier for routing, bookkeeping, and mechanical checks"
+  },
+  "onboarding": "./onboarding.md",
+  "commands": "./commands",
+  "evals": "./evals/cases.json",
+  "memory": {
+    "seeds": "./memory/seeds.md",
+    "promotion": "After each session, promote the most salient weakness and the highest-confidence improvement path to long-term memory for adaptive study planning."
+  }
+}

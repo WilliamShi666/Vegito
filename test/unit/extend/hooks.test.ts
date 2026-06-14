@@ -138,6 +138,46 @@ test('spawnHookRunner enforces the timeout, surfaced as warn', async () => {
   }
 });
 
+test('spawnHookRunner scrubs provider credentials, caps output, and runs in a safe cwd', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vg-hook-'));
+  const saved = {
+    anthropic: process.env['ANTHROPIC_API_KEY'],
+    openai: process.env['OPENAI_API_KEY'],
+    deepseek: process.env['DEEPSEEK_API_KEY'],
+  };
+  process.env['ANTHROPIC_API_KEY'] = 'secret-anthropic';
+  process.env['OPENAI_API_KEY'] = 'secret-openai';
+  process.env['DEEPSEEK_API_KEY'] = 'secret-deepseek';
+  try {
+    const script = join(dir, 'env.sh');
+    await writeFile(
+      script,
+      '#!/usr/bin/env bash\nprintf "cwd=$PWD\\n"; printf "anthropic=${ANTHROPIC_API_KEY:-}\\n"; yes X | head -c 5000\n',
+      'utf8',
+    );
+    await chmod(script, 0o755);
+
+    const runner = spawnHookRunner({ timeoutMs: 5000, cwd: dir, maxOutputBytes: 256 });
+    const result = await runner.run({ event: 'Stop', command: script }, '{}');
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, new RegExp(`cwd=${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(result.stdout, /anthropic=\n/);
+    assert.ok(result.stdout.length <= 256);
+    assert.ok(!result.stdout.includes('secret-anthropic'));
+    assert.ok(!result.stdout.includes('secret-openai'));
+    assert.ok(!result.stdout.includes('secret-deepseek'));
+  } finally {
+    if (saved.anthropic === undefined) delete process.env['ANTHROPIC_API_KEY'];
+    else process.env['ANTHROPIC_API_KEY'] = saved.anthropic;
+    if (saved.openai === undefined) delete process.env['OPENAI_API_KEY'];
+    else process.env['OPENAI_API_KEY'] = saved.openai;
+    if (saved.deepseek === undefined) delete process.env['DEEPSEEK_API_KEY'];
+    else process.env['DEEPSEEK_API_KEY'] = saved.deepseek;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('loadHooksFile: missing file is no hooks, not an error', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'vg-hookfile-'));
   try {
