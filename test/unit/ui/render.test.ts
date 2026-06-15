@@ -41,6 +41,21 @@ describe('renderEvent', () => {
     assert.match(bad!.text, /c2/);
   });
 
+  test('failed tool_end renders concise user-facing error detail', () => {
+    const f = renderEvent({
+      t: 'tool_end',
+      callId: 'c1',
+      ok: false,
+      name: 'skill',
+      error: 'no skill named "gitnexus-exploring" — available: (none)',
+    });
+
+    assert.equal(f?.channel, 'tool');
+    assert.match(f!.text, /Tool failed: skill/);
+    assert.match(f!.text, /no skill named "gitnexus-exploring"/);
+    assert.doesNotMatch(f!.text, /ModelFacingError|at Object\.run|\.js:\d+/);
+  });
+
   test('an ask renders its title and option labels', () => {
     const f = renderEvent({
       t: 'ask',
@@ -51,6 +66,55 @@ describe('renderEvent', () => {
     assert.match(f!.text, /Allow write to a\.ts\?/);
     assert.match(f!.text, /Yes/);
     assert.match(f!.text, /No/);
+  });
+
+  test('a permission ask renders as a distinct permission frame', () => {
+    const f = renderEvent({
+      t: 'ask',
+      askId: 'a1',
+      spec: {
+        kind: 'permission',
+        title: 'Allow ls (read): /workspace?',
+        tool: 'ls',
+        action: 'read',
+        target: '/workspace',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' },
+        ],
+      },
+    });
+
+    assert.equal(f?.channel, 'ask');
+    assert.match(f!.text, /^Permission request/m);
+    assert.match(f!.text, /Tool: ls/);
+    assert.match(f!.text, /Action: read/);
+    assert.match(f!.text, /Target: \/workspace/);
+    assert.match(f!.text, /\[a\] allow/);
+    assert.match(f!.text, /\[d\] deny/);
+    assert.match(f!.text, /permission>/);
+    assert.doesNotMatch(f!.text, /vegito>/);
+  });
+
+  test('queued permission asks include deterministic progress when provided', () => {
+    const f = renderEvent({
+      t: 'ask',
+      askId: 'a2',
+      spec: {
+        kind: 'permission',
+        title: 'Allow write?',
+        tool: 'write',
+        action: 'write',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' },
+        ],
+        ordinal: 2,
+        total: 3,
+      },
+    });
+
+    assert.match(f?.text ?? '', /Permission 2\/3/);
   });
 
   test('notices carry their level', () => {

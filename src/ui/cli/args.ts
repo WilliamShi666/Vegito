@@ -38,7 +38,7 @@ export type ParsedCommand =
     }
   | {
       readonly cmd: 'packs';
-      readonly sub: 'list' | 'validate' | 'validate-output' | 'trust';
+      readonly sub: 'list' | 'generated' | 'prompt' | 'validate' | 'validate-output' | 'trust';
       readonly path?: string;
       readonly candidate?: string;
       readonly cwd?: string;
@@ -224,7 +224,7 @@ export function parseArgs(argv: readonly string[]): ParsedCommand {
     const f = parseFlags(argv.slice(1));
     if ('error' in f) return { cmd: 'error', message: f.error };
     const sub = f.positionals[0] ?? 'list';
-    if (sub !== 'list' && sub !== 'validate' && sub !== 'validate-output' && sub !== 'trust') {
+    if (sub !== 'list' && sub !== 'generated' && sub !== 'prompt' && sub !== 'validate' && sub !== 'validate-output' && sub !== 'trust') {
       return { cmd: 'error', message: `unknown packs subcommand: ${sub}` };
     }
     const path = f.positionals[1];

@@ -63,6 +63,9 @@ export function createEngine(options: EngineOptions): Engine {
     const spec: AskSpec = {
       kind: 'permission',
       title: `Allow ${key.tool} (${key.action})${key.target === undefined ? '' : `: ${key.target}`}?`,
+      tool: key.tool,
+      action: key.action,
+      ...(key.target === undefined ? {} : { target: key.target }),
       options: [
         { id: 'allow', label: 'Allow' },
         { id: 'deny', label: 'Deny' },

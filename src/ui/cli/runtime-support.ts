@@ -11,6 +11,7 @@ import type { TurnResult } from '../../kernel/loop.ts';
 import type { VegitoConfig } from '../../config/schema.ts';
 import { createSystemPrompt } from '../../context/prompt.ts';
 import { IDENTITY, CONSTITUTION } from '../../context/identity.ts';
+import { SELF_MAP_LINES, renderArchitectureMap, renderEvolutionStatus, renderSelfMap } from '../../context/self-map.ts';
 import { discoverMemoryFiles } from '../../context/discovery.ts';
 import { makeBuiltinTools, type BuiltinSet } from '../../tools/index.ts';
 import { createExtensionRegistry } from '../../extend/registry.ts';
@@ -18,6 +19,7 @@ import { loadPack, type LoadedPack } from '../../extend/packs.ts';
 import { loadHooksFile, createHookBus, spawnHookRunner, type HookBus, type HookSpec } from '../../extend/hooks.ts';
 import type { Transcript } from '../../sessions/transcript.ts';
 import type { NeutralMsg } from '../../providers/types.ts';
+import { listGeneratedPacks, renderGeneratedPacks } from './generated-packs.ts';
 
 export function cwdFor(c: { readonly cwd?: string }, baseCwd: string): string {
   return c.cwd === undefined ? baseCwd : resolve(baseCwd, c.cwd);
@@ -124,6 +126,15 @@ async function readPackText(pack: LoadedPack, rel: string | undefined): Promise<
   }
 }
 
+async function generatedPackContext(cwd: string): Promise<string | undefined> {
+  const summaries = await listGeneratedPacks(cwd);
+  if (summaries.length === 0) return undefined;
+  return [
+    'Recent generated harnesses are already known. When the user asks which harnesses have been built so far, answer from this list before using tools.',
+    renderGeneratedPacks(summaries).trimEnd(),
+  ].join('\n');
+}
+
 export async function buildSystemTiers(
   cwd: string,
   homeDir: string,
@@ -135,12 +146,15 @@ export async function buildSystemTiers(
   } catch {
     memoryFiles = [];
   }
+  const packLines = await packPromptLines(packs);
+  const generatedContext = await generatedPackContext(cwd);
   const prompt = createSystemPrompt({
     identity: IDENTITY,
     constitution: CONSTITUTION,
     environment: { cwd, platform: platform(), date: new Date().toISOString().slice(0, 10) },
     memoryFiles,
-    packs: await packPromptLines(packs),
+    packs: generatedContext === undefined ? packLines : [...packLines, generatedContext],
+    selfMap: SELF_MAP_LINES,
   });
   return prompt.tiers();
 }
@@ -188,6 +202,16 @@ export function replCommands(source: ReturnType<ReturnType<typeof createExtensio
   return out;
 }
 
+function withLocalCommands(commands: ReplPorts['commands'], packsText: string): NonNullable<ReplPorts['commands']> {
+  return {
+    ...(commands ?? {}),
+    packs: (): { readonly kind: 'local'; readonly text: string } => ({ kind: 'local', text: packsText }),
+    self: (): { readonly kind: 'local'; readonly text: string } => ({ kind: 'local', text: renderSelfMap() }),
+    architecture: (): { readonly kind: 'local'; readonly text: string } => ({ kind: 'local', text: renderArchitectureMap() }),
+    'evolution-status': (): { readonly kind: 'local'; readonly text: string } => ({ kind: 'local', text: renderEvolutionStatus() }),
+  };
+}
+
 export async function runInteractiveTranscript(opts: {
   readonly transcript: Transcript;
   readonly initialMessages: readonly NeutralMsg[];
@@ -202,18 +226,20 @@ export async function runInteractiveTranscript(opts: {
     { sid: opts.transcript.sid, model: opts.modelId, maxIterations: opts.maxIterations },
     opts.initialMessages,
   );
-  const promptNextLine = async (): Promise<string | null> => {
-    opts.write('vegito> ');
+  const promptNextLine: ReplPorts['nextLine'] = async (request): Promise<string | null> => {
+    if (request?.kind === 'chat') opts.write('vegito> ');
+    else if (request?.kind === 'permission' && request.invalid === true) opts.write('permission> ');
     const line = await opts.nextLine();
     if (line === null) opts.write('\n');
     return line;
   };
   opts.write(`vegito repl ready - session ${opts.transcript.sid}\n`);
+  const packsText = renderGeneratedPacks(await listGeneratedPacks(opts.deps.exec.ctx.cwd));
 
   const replPorts: ReplPorts = {
     nextLine: promptNextLine,
     write: opts.write,
-    ...(opts.commands === undefined ? {} : { commands: opts.commands }),
+    commands: withLocalCommands(opts.commands, packsText),
     startTurn: (text: string): AsyncGenerator<LoopEvent, TurnResult> => {
       const before = state.history.length;
       state = reduce(state, { t: 'user_msg', blocks: [{ kind: 'text', text }] });

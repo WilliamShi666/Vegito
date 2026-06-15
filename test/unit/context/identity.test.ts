@@ -24,6 +24,18 @@ test('CONSTITUTION is a frozen non-empty list of one-line principles', () => {
   }
 });
 
+test('CONSTITUTION includes compact tool, claim, and manual evolution discipline', () => {
+  const text = CONSTITUTION.join('\n');
+  assert.match(text, /session\/system context first|available session\/system context/i);
+  assert.match(text, /implemented behavior/i);
+  assert.match(text, /manually triggered workflows/i);
+  assert.match(text, /permission denial/i);
+  assert.match(text, /tool failure/i);
+  assert.match(text, /hidden chain-of-thought|raw internal traces/i);
+  assert.match(text, /Harness mutations and evolution are manual by default/i);
+  assert.match(text, /costly eval sweeps/i);
+});
+
 test('identity copy is stable across imports (byte anchor, D4)', async () => {
   const again = await import('../../../src/context/identity.ts');
   assert.equal(again.IDENTITY, IDENTITY);

@@ -23,7 +23,17 @@ export interface AskOption {
 // Everything the loop can ask a human, declaratively — UIs render it,
 // permissions/tools never talk to a terminal themselves.
 export type AskSpec =
-  | { kind: 'permission'; title: string; detail?: string; options: readonly AskOption[] }
+  | {
+      kind: 'permission';
+      title: string;
+      detail?: string;
+      tool?: string;
+      action?: 'read' | 'write' | 'execute' | 'network';
+      target?: string;
+      ordinal?: number;
+      total?: number;
+      options: readonly AskOption[];
+    }
   | { kind: 'input'; title: string; placeholder?: string };
 
 // Tool-provided display hint. `kind` is an open vocabulary ('text', 'diff',
@@ -39,7 +49,7 @@ export type LoopEvent =
   | { t: 'text_delta'; text: string }
   | { t: 'thinking_delta'; text: string }
   | { t: 'tool_start'; callId: string; name: string; input: unknown }
-  | { t: 'tool_end'; callId: string; ok: boolean; ui?: ToolUIData }
+  | { t: 'tool_end'; callId: string; ok: boolean; name?: string; error?: string; ui?: ToolUIData }
   | { t: 'ask'; askId: string; spec: AskSpec }
   | { t: 'context'; used: number; budget: number }
   | { t: 'compaction'; kind: 'micro' | 'full' }

@@ -72,9 +72,11 @@ vegito evolve packs/ielts --session <session-id> --mode acceptEdits --apply
 vegito evolve revert packs/ielts
 ```
 
-For a first local setup, see [GETTING_STARTED.md](./GETTING_STARTED.md). Full command
-reference and configuration are in [USER_GUIDE.md](./USER_GUIDE.md). To build or
-hand-write a pack, see [PACK_AUTHORING.md](./PACK_AUTHORING.md).
+For a first local setup, see [GETTING_STARTED.md](./GETTING_STARTED.md). If you want a
+Chinese, command-first walkthrough for users and other agents, start with
+[USAGE.md](./USAGE.md). Full command reference and configuration are in
+[USER_GUIDE.md](./USER_GUIDE.md). To build or hand-write a pack, see
+[PACK_AUTHORING.md](./PACK_AUTHORING.md).
 
 ## Permission modes
 

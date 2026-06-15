@@ -29,6 +29,7 @@ export interface PromptParts {
   readonly environment: PromptEnvironment;
   readonly memoryFiles: readonly MemoryFile[];
   readonly packs: readonly string[];
+  readonly selfMap?: readonly string[];
 }
 
 export interface SystemPrompt {
@@ -45,13 +46,16 @@ function renderT1(parts: PromptParts): string {
 }
 
 function renderT2(parts: PromptParts): string {
-  const { environment, packs, memoryFiles } = parts;
+  const { environment, packs, memoryFiles, selfMap = [] } = parts;
   const lines = [
     '## Environment',
     `- cwd: ${environment.cwd}`,
     `- platform: ${environment.platform}`,
     `- date: ${environment.date}`,
   ];
+  if (selfMap.length > 0) {
+    lines.push('', '## Self map', ...selfMap.map((line) => `- ${line}`));
+  }
   if (packs.length > 0) {
     lines.push('', '## Active packs', ...packs.map((p) => `- ${p}`));
   }

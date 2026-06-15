@@ -6,15 +6,20 @@
 // mid-turn pulls the next input line as the answer and settles the broker —
 // matching the executor's surface-then-await protocol — then the turn resumes.
 
-import type { LoopEvent } from '../kernel/events.ts';
+import type { AskSpec, LoopEvent } from '../kernel/events.ts';
 import type { TurnResult } from '../kernel/loop.ts';
 import { renderEvent } from './render.ts';
 
-export type CommandHandler = (args: string) => string;
+export type ReplInputRequest =
+  | { readonly kind: 'chat' }
+  | { readonly kind: 'permission'; readonly askId: string; readonly spec: AskSpec; readonly invalid?: boolean };
+
+export type CommandResult = string | { readonly kind: 'turn'; readonly text: string } | { readonly kind: 'local'; readonly text: string };
+export type CommandHandler = (args: string) => CommandResult;
 
 export interface ReplPorts {
   /** Next line of user input, or null at end of stream. */
-  nextLine: () => Promise<string | null>;
+  nextLine: (request?: ReplInputRequest) => Promise<string | null>;
   /** Output sink. */
   write: (s: string) => void;
   /** Reduce a user line into the session and start a turn. */
@@ -30,6 +35,35 @@ function writeFrame(write: (s: string) => void, ev: LoopEvent): void {
   if (!frame) return;
   if (frame.channel === 'text') write(frame.text);
   else write(`${frame.text}\n`);
+}
+
+function normalizePermissionAnswer(raw: string): 'allow' | 'deny' | 'details' | undefined {
+  const value = raw.trim().toLowerCase();
+  if (value === 'a' || value === 'allow' || value === 'y' || value === 'yes') return 'allow';
+  if (value === 'd' || value === 'deny' || value === 'n' || value === 'no') return 'deny';
+  if (value === '?' || value === 'details' || value === 'detail') return 'details';
+  return undefined;
+}
+
+async function readAskAnswer(ports: ReplPorts, askId: string, spec: AskSpec): Promise<string> {
+  if (spec.kind !== 'permission') {
+    return (await ports.nextLine({ kind: 'permission', askId, spec })) ?? '';
+  }
+
+  let invalid = false;
+  for (;;) {
+    const answer = await ports.nextLine({ kind: 'permission', askId, spec, ...(invalid ? { invalid: true } : {}) });
+    if (answer === null) return 'deny';
+    const normalized = normalizePermissionAnswer(answer ?? '');
+    if (normalized === 'allow' || normalized === 'deny') return normalized;
+    if (normalized === 'details') {
+      const frame = renderEvent({ t: 'ask', askId, spec });
+      if (frame !== null) ports.write(`${frame.text}\n`);
+    } else {
+      ports.write('Please answer with [a] allow, [d] deny, or [?] details.\n');
+    }
+    invalid = true;
+  }
 }
 
 // "/name rest" → ['name', 'rest']; a bare "/name" → ['name', ''].
@@ -50,8 +84,8 @@ async function runOneTurn(ports: ReplPorts, text: string): Promise<void> {
       // The executor has surfaced an ask and is awaiting the answer. Pull the
       // next input line, settle the broker, then advance — the generator
       // resumes once decide() sees the resolved deferred.
-      const answer = await ports.nextLine();
-      ports.settleAsk(ev.askId, answer ?? '');
+      const answer = await readAskAnswer(ports, ev.askId, ev.spec);
+      ports.settleAsk(ev.askId, answer);
     }
     step = await gen.next();
   }
@@ -60,7 +94,7 @@ async function runOneTurn(ports: ReplPorts, text: string): Promise<void> {
 export async function runRepl(ports: ReplPorts): Promise<void> {
   const commands = ports.commands ?? {};
   for (;;) {
-    const line = await ports.nextLine();
+    const line = await ports.nextLine({ kind: 'chat' });
     if (line === null) return; // EOF
     const trimmed = line.trim();
     if (trimmed === '') continue;
@@ -69,7 +103,13 @@ export async function runRepl(ports: ReplPorts): Promise<void> {
     if (slash) {
       const handler = commands[slash.name];
       if (handler) {
-        await runOneTurn(ports, handler(slash.args));
+        const result = handler(slash.args);
+        const commandResult = typeof result === 'string' ? { kind: 'turn' as const, text: result } : result;
+        if (commandResult.kind === 'local') {
+          ports.write(commandResult.text.endsWith('\n') ? commandResult.text : `${commandResult.text}\n`);
+        } else {
+          await runOneTurn(ports, commandResult.text);
+        }
       } else {
         ports.write(`unknown command: /${slash.name}\n`);
       }

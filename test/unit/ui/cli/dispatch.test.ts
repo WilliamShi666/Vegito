@@ -206,6 +206,77 @@ test('packs list discovers configured roots and packs trust records explicit hoo
   assert.deepEqual(trusted, ['demo']);
 });
 
+test('packs generated lists generated harnesses with descriptions and slash commands', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-home-'));
+  const generatedRoot = join(home, 'generated');
+  const pack = join(generatedRoot, 'demo-live');
+  await mkdir(join(pack, 'commands'), { recursive: true });
+  await writeFile(join(pack, 'commands', 'demo-start.md'), '---\ndescription: Start demo.\n---\nDemo $ARGUMENTS', 'utf8');
+  await writeFile(join(pack, 'commands', 'demo-review.md'), 'Review $ARGUMENTS', 'utf8');
+  await writeFile(
+    join(pack, 'pack.json'),
+    JSON.stringify({
+      schema: 1,
+      name: 'demo-harness',
+      version: '1.2.3',
+      description: 'A demo generated harness.',
+      commands: './commands',
+      grants: [],
+      agents: [],
+      rubrics: [],
+      modelTiers: {},
+    }),
+    'utf8',
+  );
+  const { out, ports } = collector();
+
+  const code = await dispatch(['packs', 'generated', '--cwd', home], ports({ homeDir: home, cwd: '/tmp' }));
+
+  assert.equal(code, 0);
+  const text = out.join('');
+  assert.match(text, /generated\/demo-live/);
+  assert.match(text, /demo-harness/);
+  assert.match(text, /v1\.2\.3/);
+  assert.match(text, /A demo generated harness/);
+  assert.match(text, /\/demo-review, \/demo-start/);
+});
+
+test('packs prompt prints the assembled prompt tiers with self-map context', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-prompt-'));
+  const { out, ports } = collector();
+
+  const code = await dispatch(['packs', 'prompt', '--cwd', home], ports({ homeDir: home, cwd: '/tmp' }));
+
+  assert.equal(code, 0);
+  const text = out.join('');
+  assert.match(text, /# System tier 1/);
+  assert.match(text, /# System tier 2/);
+  assert.match(text, /Tool, claim, and evolution discipline|Harness mutations and evolution are manual by default/i);
+  assert.match(text, /## Self map/);
+  assert.match(text, /manual-triggered/i);
+});
+
+test('REPL exposes deterministic self, architecture, and evolution-status commands without a model turn', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vegito-local-self-'));
+  const script = await scriptFile([{ kind: 'events', events: scriptedText('model should not run') }]);
+  const lines: (string | null)[] = ['/self', '/architecture', '/evolution-status', null];
+  let i = 0;
+  const nextLine = async (): Promise<string | null> => lines[i++] ?? null;
+  const { out, ports } = collector();
+
+  const code = await dispatch(['repl', '--script', script, '--cwd', home], ports({ homeDir: home, cwd: '/tmp', nextLine }));
+
+  assert.equal(code, 0);
+  const text = out.join('');
+  assert.match(text, /Vegito self-map/i);
+  assert.match(text, /meta-harness/i);
+  assert.match(text, /Vegito architecture/i);
+  assert.match(text, /T1.*T2|system prompt/i);
+  assert.match(text, /Evolution status/i);
+  assert.match(text, /manual-triggered/i);
+  assert.doesNotMatch(text, /model should not run/);
+});
+
 test('packs validate without a path exits 2', async () => {
   const { err, ports } = collector();
   const code = await dispatch(['packs', 'validate'], ports({}));

@@ -15,6 +15,7 @@ export interface Frame {
 }
 
 const MAX_INPUT_PREVIEW = 120;
+const MAX_ERROR_LINES = 10;
 
 // A one-line, bounded preview of arbitrary tool input — never executes it.
 function previewInput(input: unknown): string {
@@ -31,6 +32,50 @@ function previewInput(input: unknown): string {
 
 function usageText(u: Usage): string {
   return `${u.in} in / ${u.out} out`;
+}
+
+function normalizeToolError(error: string): string {
+  const lines = error
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd().replace(/^(?:ModelFacingError|Error):\s*/, ''))
+    .filter((line) => line.trim() !== '' && !/^\s*at\s/.test(line) && !/\.js:\d+:\d+\)?$/.test(line));
+  const kept = lines.slice(0, MAX_ERROR_LINES);
+  const suffix = lines.length > kept.length ? [`... ${lines.length - kept.length} more line(s) hidden`] : [];
+  return [...kept, ...suffix].join('\n');
+}
+
+function renderToolFailure(ev: Extract<LoopEvent, { t: 'tool_end' }>): Frame {
+  const name = ev.name ?? ev.callId;
+  if (ev.error === undefined || ev.error.trim() === '') {
+    return { channel: 'tool', text: `Tool failed: ${name}` };
+  }
+  return { channel: 'tool', text: `Tool failed: ${name}\nReason: ${normalizeToolError(ev.error)}` };
+}
+
+function displayOption(id: string, fallback: string): string {
+  if (id === 'allow') return '[a] allow';
+  if (id === 'deny') return '[d] deny';
+  return `[${id}] ${fallback}`;
+}
+
+function renderPermissionAsk(ev: Extract<LoopEvent, { t: 'ask' }>): Frame {
+  const spec = ev.spec;
+  if (spec.kind !== 'permission') return { channel: 'ask', text: `? ${spec.title}` };
+  const header =
+    spec.ordinal !== undefined && spec.total !== undefined
+      ? `Permission request (Permission ${spec.ordinal}/${spec.total})`
+      : 'Permission request';
+  const lines = [header];
+  if (spec.tool !== undefined) lines.push(`Tool: ${spec.tool}`);
+  if (spec.action !== undefined) lines.push(`Action: ${spec.action}`);
+  if (spec.target !== undefined) lines.push(`Target: ${spec.target}`);
+  if (spec.detail !== undefined && spec.detail !== '') lines.push('', spec.detail);
+  if (spec.tool === undefined && spec.action === undefined && spec.target === undefined) {
+    lines.push(spec.title);
+  }
+  const opts = spec.options.map((o) => displayOption(o.id, o.label)).join('  ');
+  lines.push('', `${opts}  [?] details`, 'permission>');
+  return { channel: 'ask', text: lines.join('\n') };
 }
 
 export function renderEvent(ev: LoopEvent): Frame | null {
@@ -52,15 +97,11 @@ export function renderEvent(ev: LoopEvent): Frame | null {
       return { channel: 'tool', text: preview ? `⚙ ${ev.name} ${preview}` : `⚙ ${ev.name}` };
     }
     case 'tool_end':
-      return ev.ok
-        ? { channel: 'tool', text: `  ✓ ${ev.callId}` }
-        : { channel: 'tool', text: `  ✗ ${ev.callId} failed` };
+      return ev.ok ? { channel: 'tool', text: `  ✓ ${ev.callId}` } : renderToolFailure(ev);
     case 'ask': {
       const head = `? ${ev.spec.title}`;
       if (ev.spec.kind === 'permission') {
-        const opts = ev.spec.options.map((o) => `[${o.id}] ${o.label}`).join('  ');
-        const detail = ev.spec.detail ? `\n  ${ev.spec.detail}` : '';
-        return { channel: 'ask', text: `${head}${detail}\n  ${opts}` };
+        return renderPermissionAsk(ev);
       }
       const ph = ev.spec.placeholder ? ` (${ev.spec.placeholder})` : '';
       return { channel: 'ask', text: `${head}${ph}` };

@@ -44,7 +44,7 @@ function toLoopEvent(ev: ProviderEvent): LoopEvent | undefined {
     case 'thinking_delta':
       return { t: 'thinking_delta', text: ev.text };
     case 'tool_call':
-      return { t: 'tool_start', callId: ev.callId, name: ev.name, input: ev.input };
+      return undefined;
     default:
       return undefined;
   }

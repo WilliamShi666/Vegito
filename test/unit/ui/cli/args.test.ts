@@ -130,6 +130,10 @@ describe('parseArgs', () => {
   test('packs takes list | validate <path>', () => {
     const list = parseArgs(['packs', 'list']);
     assert.equal(list.cmd === 'packs' && list.sub, 'list');
+    const generated = parseArgs(['packs', 'generated']);
+    assert.equal(generated.cmd === 'packs' && generated.sub, 'generated');
+    const prompt = parseArgs(['packs', 'prompt']);
+    assert.equal(prompt.cmd === 'packs' && prompt.sub, 'prompt');
     const v = parseArgs(['packs', 'validate', './my-pack']);
     assert.equal(v.cmd === 'packs' && v.sub, 'validate');
     assert.equal(v.cmd === 'packs' && v.path, './my-pack');

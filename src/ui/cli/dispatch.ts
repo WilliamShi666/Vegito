@@ -63,6 +63,7 @@ import type { PermKey } from '../../tools/spec.ts';
 import type { NeutralMsg, ProviderEvent } from '../../providers/types.ts';
 import { buildCallModel, catalogFilesFor, effectiveConfig, usage, writeCatalogWarnings, type ModelSeam } from './dispatch-support.ts';
 import { validatePackOutput } from './output-validation.ts';
+import { listGeneratedPacks, renderGeneratedPacks } from './generated-packs.ts';
 
 export { buildCallModel } from './dispatch-support.ts';
 
@@ -337,6 +338,14 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
     if (count === 0) ports.write('no packs\n');
     return 0;
   }
+  if (c.sub === 'generated') {
+    ports.write(renderGeneratedPacks(await listGeneratedPacks(cwd)));
+    return 0;
+  }
+  if (c.sub === 'prompt') {
+    ports.write(renderPromptTiers(await buildSystemTiers(cwd, ports.homeDir)));
+    return 0;
+  }
   if (c.sub === 'trust') {
     if (c.path === undefined) {
       ports.writeErr('packs trust needs a pack name or directory\n');
@@ -384,6 +393,10 @@ async function cmdPacks(c: Extract<ParsedCommand, { cmd: 'packs' }>, ports: Disp
     ports.writeErr(`invalid pack: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
+}
+
+function renderPromptTiers(tiers: readonly string[]): string {
+  return `${tiers.map((tier, index) => `# System tier ${index + 1}\n${tier}`).join('\n\n')}\n`;
 }
 
 // forge: resolve a plan (from docs, flags, or an interactive interview) → spec →

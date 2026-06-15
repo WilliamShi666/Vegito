@@ -116,6 +116,30 @@ test('a tool that throws ModelFacingError yields ok:false carrying its modelText
   assert.equal(r.content, 'file not found: /x');
 });
 
+test('a missing skill failure surfaces as a failed tool result event without a stack trace', async () => {
+  const reg = new ToolRegistry();
+  reg.register(
+    readTool('skill', () => {
+      throw new ModelFacingError('no skill named "gitnexus-exploring" — available: (none)');
+    }),
+  );
+
+  const { events, result } = await drive(executeTools([call('c1', 'skill', { name: 'gitnexus-exploring' })], makeDeps(reg)));
+  const end = events.find((e) => e.t === 'tool_end');
+  const r = (result as { ok: boolean; content: string }[])[0]!;
+
+  assert.equal(r.ok, false);
+  assert.match(r.content, /no skill named "gitnexus-exploring"/);
+  assert.doesNotMatch(r.content, /ModelFacingError|at Object\.run|\.js:\d+/);
+  assert.deepEqual(end, {
+    t: 'tool_end',
+    callId: 'c1',
+    ok: false,
+    name: 'skill',
+    error: 'no skill named "gitnexus-exploring" — available: (none)',
+  });
+});
+
 test('a denied permission yields a failed result naming the denial (default mode, no rules)', async () => {
   const reg = new ToolRegistry();
   reg.register(writeTool('danger', () => 'did it'));

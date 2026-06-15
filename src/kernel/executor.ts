@@ -172,7 +172,13 @@ export async function* executeTools(
     const fitted = await deps.budget.fit(c.callId, composed);
     results.push({ callId: c.callId, ok, content: fitted.content });
     const ui = uiData === undefined ? undefined : { kind: 'tool', data: uiData };
-    yield { t: 'tool_end', callId: c.callId, ok, ...(ui === undefined ? {} : { ui }) };
+    yield {
+      t: 'tool_end',
+      callId: c.callId,
+      ok,
+      ...(!ok ? { name: c.name, error: fitted.content } : {}),
+      ...(ui === undefined ? {} : { ui }),
+    };
   }
   return results;
 }
