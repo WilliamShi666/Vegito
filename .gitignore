@@ -4,5 +4,11 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 
+# local configuration and credentials
+.env
+.env.*
+!.env.example
+.vegito/
+
 # never commit — embeds a live API credential
 DeepSeek_Anthropic_Integration.md

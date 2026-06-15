@@ -76,14 +76,19 @@ node bin/vegito.js help
 常见设置：
 
 ```sh
-export ANTHROPIC_AUTH_TOKEN=<your_api_key>
+export DEEPSEEK_API_KEY=<your_api_key>
 ```
 
 也支持：
 
 ```sh
 export ANTHROPIC_API_KEY=<your_api_key>
+export ANTHROPIC_AUTH_TOKEN=<your_api_key>
 ```
+
+DeepSeek profile 的读取顺序是 `DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、
+`ANTHROPIC_AUTH_TOKEN`。如果使用 `.env`，请从 `.env.example` 复制，本机填写真实
+key；不要提交 `.env` 或任何包含真实 provider key 的文档。
 
 如果只是跑测试、离线路径、`--script` fixture、`forge --offline`、`packs validate`、`packs generated` 等命令，不需要真实模型 key。
 

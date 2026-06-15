@@ -1,6 +1,6 @@
 # Vegito 启动与使用教程
 
-**Last Updated:** 2026-06-14
+**Last Updated:** 2026-06-15
 
 这份文档面向第一次接触 Vegito 的同事，目标是让你能在本地启动项目、跑一个任务、创建并使用 pack、理解 session 和自进化的基本流程。
 
@@ -90,14 +90,23 @@ catalog overlay。
 
 DeepSeek 通过 Anthropic-compatible API 接入。`deepseek-v4-pro` 和
 `deepseek-v4-flash` 的官方 base URL 已经写在 `catalog/models.json`，通常只需要设置
-API key。不要把 key 写进文档、测试 fixture 或提交记录。只在 shell 环境里设置：
+API key。不要把 key 写进文档、测试 fixture 或提交记录。推荐只在 shell 环境里设置：
 
 ```sh
-export ANTHROPIC_AUTH_TOKEN=<your DeepSeek API key>
+export DEEPSEEK_API_KEY=<your DeepSeek API key>
 ```
 
-Vegito also accepts `ANTHROPIC_API_KEY` for Anthropic-compatible providers. If both are
-set, `ANTHROPIC_API_KEY` wins.
+Vegito 也兼容 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_AUTH_TOKEN`。对 DeepSeek catalog
+profile，读取顺序是 `DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`。
+
+如果你习惯使用 dotenv 文件，可以复制公开模板后只在本机填写真实值：
+
+```sh
+cp .env.example .env
+```
+
+`.env`、`.env.*`、`.vegito/` 和本地私有的 `DeepSeek_Anthropic_Integration.md`
+都已被 `.gitignore` 排除，不应该进入 GitHub。
 
 默认 `vegito`、`vegito repl`、`vegito run` 都会使用 `deepseek-v4-pro`。也可以显式选择模型：
 
@@ -337,7 +346,7 @@ grep -n "deepseek-v4" catalog/models.json
 通常是 API key 错误或过期。重新设置环境变量，不要把 key 写入 repo：
 
 ```sh
-export ANTHROPIC_AUTH_TOKEN=<new key>
+export DEEPSEEK_API_KEY=<new key>
 ```
 
 ### `evolve` 没有改文件

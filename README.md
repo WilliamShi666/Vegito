@@ -1,75 +1,252 @@
 # Vegito
 
-**The fusion agent harness.** Vegito is a zero-runtime-dependency TypeScript agent
-harness with three faces:
+**A meta-harness compiler for domain-specific AI agents.**
 
-1. **A general agent** — coding and general work driven from a terminal REPL or a
-   headless one-shot command, on par with the harnesses it was distilled from.
-2. **A meta-harness** — `vegito forge` generates a complete *domain pack* (a team of
-   role-specialized agents, skills, grading rubrics, memory seeds, and onboarding) for
-   any field, as data over the same interfaces the core uses.
-3. **An evolving system** — `vegito evolve` reviews real sessions, proposes versioned
-   improvements to a pack and its memory, and applies them through the same permission
-   gate that governs every other write. Nothing about a pack is frozen; it improves
-   through use, and every change is revertible with provenance.
+Vegito is an experimental TypeScript agent harness that can generate, run,
+validate, and evolve specialized AI workflows for real domains.
 
-Vegito is named for the fusion: it is meant to be the synthesis of the agent harnesses
-studied to build it (Claude Code, Codex, Hermes, opencode) *and* something further
-beyond — capabilities none of them has. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the
-design and the "transcendence ledger" of what is new.
+Instead of shipping one fixed assistant, Vegito builds the assistant you need:
 
-## Why it is different
+- a TOEFL / IELTS tutor harness
+- a data science analysis team harness
+- a US undergraduate admissions counselor harness
+- a finance advisor harness
+- a code review team harness
+- any other domain-specific workflow harness
 
-- **One of everything.** One loop, one state model, one orchestration primitive for
-  sub-agents, one extension registry, one permission gate. The structural advantage is
-  *absence*: no dual systems, no migration debt, no flag forests.
-- **Zero runtime dependencies.** `dependencies: {}`, forever. The whole product runs on
-  the Node standard library. Every external adapter is an optional, fail-soft seam.
-- **No build step in development.** Node ≥ 22.18 strips TypeScript types natively, so the
-  source and the tests run as `.ts` directly. The only `devDependencies` are `typescript`
-  and `@types/node`.
-- **Safety is honest.** Every mechanism ships to every user. The permission gate is the
-  one real boundary; hooks and rules layer over it but can never weaken it. Anything
-  unparseable fails closed.
-- **The Forge.** Every studied harness can *host* extensions; none can *generate* them.
-  Vegito interviews you (or ingests a domain description) and emits a complete, validated
-  pack — offline, deterministically, in one sitting.
-- **The evolution loop.** No studied harness closes the loop from observed friction back
-  to a durable, gated, revertible improvement. Vegito does.
+Generated harnesses are not just prompt files. A Vegito pack can include:
 
-## Requirements
+- role-specialized agents
+- slash commands
+- memory policy
+- tool grants
+- rubrics
+- hard validators
+- eval cases
+- onboarding
+- artifact requirements
+- evolution hooks
 
-- **Node ≥ 22.18** (24 LTS recommended). No other runtime dependency.
+The goal is simple:
+
+> Turn a user need into a runnable, inspectable, improvable agent harness.
+
+## Why Vegito Exists
+
+Most agent tools give you a powerful general-purpose assistant.
+
+Vegito asks a different question:
+
+> What if the agent could design the right harness for the task before doing the task?
+
+A TOEFL tutor, a data science team, and an admissions counselor should not share the
+same prompt, tools, memory, evaluation criteria, or workflow.
+
+Vegito treats the harness itself as the product.
+
+It compiles a domain request into a structured pack that can be loaded and used
+immediately:
+
+```sh
+vegito forge --native \
+  --domain "US undergraduate admissions counselor" \
+  --name admissions-counselor
+
+vegito repl --pack generated/admissions-counselor
+```
+
+Then use domain-specific commands:
+
+```text
+/admissions-profile-review
+/admissions-school-list
+/admissions-essay-plan
+```
+
+## Vegito / Vegito 是什么
+
+Vegito 是一个面向领域任务的 meta-harness 编译器，用来把“用户需求”变成
+“可运行、可验证、可持续演化的 AI harness”。
+
+它不是只给你一个通用助手，而是帮你构建适合具体领域的助手系统：
+
+- 托福 / 雅思教练
+- 数据科学分析团队
+- 美国本科申请顾问
+- 金融分析助手
+- 代码审查团队
+- 其他任何有明确工作流的领域
+
+Vegito 生成的不是单一 prompt，而是一整套可执行的 pack：
+
+- 角色化 agents
+- slash commands
+- memory policy
+- tool grants
+- rubrics
+- validators
+- eval cases
+- onboarding
+- artifact requirements
+- evolution hooks
+
+一句话概括：
+
+> 把用户需求编译成一个可运行、可检查、可改进的 AI harness。
+
+## What Makes Vegito Different
+
+### 1. Meta-Harness First
+
+Vegito's core identity is not self-evolution.
+
+Self-evolution is a downstream mechanism.
+
+The primary goal is to generate high-quality, domain-specific harnesses from user
+intent.
+
+```text
+user need -> domain blueprint -> runnable harness -> validated workflow -> improvement loop
+```
+
+### 2. Runtime-Ready Harnesses
+
+Generated harnesses are meant to work immediately.
+
+A native-generated pack can include commands, roles, memory, validators, evals, and
+tool permissions that Vegito can run directly:
+
+```sh
+vegito repl --pack generated/toefl-live
+vegito run --pack generated/data-live -p "Analyze this churn dataset"
+vegito packs validate generated/admissions-counselor
+vegito packs validate-output generated/admissions-counselor output.md
+```
+
+### 3. Validation, Not Just Vibes
+
+Vegito harnesses can include both soft and hard checks:
+
+- rubric prompts
+- required signals
+- score gates
+- artifact checks
+- validator scripts
+- eval cases
+
+This makes generated harnesses inspectable and testable instead of opaque prompt blobs.
+
+### 4. Memory as a Harness Primitive
+
+Different harnesses need different memory.
+
+A TOEFL tutor should remember score history and recurring weaknesses.
+
+A data science harness should remember dataset assumptions, schema risks, causal
+rejections, and artifact status.
+
+An admissions counselor should remember applicant profile, target schools, deadlines,
+essays, recommendation status, financial aid constraints, and next actions.
+
+Vegito makes memory policy part of the generated harness.
+
+### 5. Safe Evolution
+
+Vegito can observe real sessions and propose improvements to a harness.
+
+But evolution is gated:
+
+- permission checks
+- provenance
+- rollback
+- validators
+- evals
+- no uncontrolled source self-rewrite
+
+The harness can improve, but not by silently mutating the core system.
+
+## Current Examples
+
+This repository includes generated harnesses such as:
+
+### TOEFL Speaking Coach
+
+```sh
+vegito repl --pack generated/toefl-live
+```
+
+Commands:
+
+```text
+/toefl-diagnose
+/toefl-drill
+/toefl-review
+/toefl-full-test
+/toefl-explain-rubric
+```
+
+### Customer Churn Data Science Team
+
+```sh
+vegito repl --pack generated/data-live
+```
+
+Commands:
+
+```text
+/churn-run-pipeline
+/churn-quality-gates
+/churn-inspect-schema
+/churn-eda
+/churn-causal-review
+```
+
+### US Undergraduate Admissions Counselor
+
+```sh
+vegito repl --pack generated/admissions-counselor
+```
+
+Commands:
+
+```text
+/admissions-profile-review
+/admissions-school-list
+/admissions-essay-plan
+```
 
 ## Quickstart
 
-Default live runs use DeepSeek's official `deepseek-v4-pro` Anthropic-compatible
-profile with `reasoningEffort: "max"`. Set `ANTHROPIC_AUTH_TOKEN` or
-`ANTHROPIC_API_KEY` in your shell; never commit provider credentials.
+```sh
+npm install
+npm run install:local
+vegito
+```
+
+For live DeepSeek calls:
 
 ```sh
-# Start an interactive session.
-vegito
+export DEEPSEEK_API_KEY=<your_api_key>
+```
 
-# Run a one-shot task headlessly (prints the answer, exits with a status code).
+For a headless task:
+
+```sh
 vegito run -p "explain what this repo does"
+```
 
-# Forge a domain pack — here, an IELTS tutor team — fully offline and deterministic.
+For an offline pack:
+
+```sh
 vegito forge --offline --archetype tutor-team --domain "IELTS writing and speaking" \
   --name ielts --out packs/ielts
+```
 
-# Check that a pack is well-formed.
+For validation:
+
+```sh
 vegito packs validate packs/ielts
-
-# Review a finished session and let Vegito propose improvements to a pack
-# without mutating anything.
 vegito evolve packs/ielts --session <session-id>
-
-# Apply accepted proposals through the permission gate.
-vegito evolve packs/ielts --session <session-id> --mode acceptEdits --apply
-
-# Undo the last batch of applied improvements.
-vegito evolve revert packs/ielts
 ```
 
 For a first local setup, see [GETTING_STARTED.md](./GETTING_STARTED.md). If you want a
@@ -122,6 +299,13 @@ npm run check            # typecheck + constitution lint + full suite
 npm run coverage         # line/branch coverage
 npm run test:adversarial # the hostile-input suite
 ```
+
+## Credential Safety
+
+Use `.env.example` as the public template for local credentials. Real `.env`
+files, local `.vegito/` configuration, generated build output, coverage output,
+`node_modules/`, and the private `DeepSeek_Anthropic_Integration.md` note are
+ignored by Git.
 
 ## License
 
