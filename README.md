@@ -1,6 +1,14 @@
 # Vegito
 
+<p align="center">
+  <a href="#english"><strong>English</strong></a>
+  &nbsp;|&nbsp;
+  <a href="#中文"><strong>中文</strong></a>
+</p>
+
 ## English
+
+<p align="right"><a href="#中文">中文</a></p>
 
 **Vegito turns a domain request into a runnable, validated, evolvable AI harness.**
 
@@ -182,6 +190,8 @@ vegito evolve packs/ielts --session <session-id>
 ```
 
 ## 中文
+
+<p align="right"><a href="#english">English</a></p>
 
 **Vegito 会把一个领域需求编译成可运行、可验证、可持续演化的 AI harness。**
 
